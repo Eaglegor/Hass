@@ -14,6 +14,9 @@ blueprint:
       code is sent).
     - When the room's average temperature drops to target_temperature -
       threshold or below, the AC is turned off.
+    - The AC is never turned on while outside_temperature is below 16°C,
+      and is turned off if it drops below 16°C while the AC is running
+      (cooling makes no sense once it's that cold outside).
   domain: automation
   input:
     target_temperature:
@@ -42,6 +45,15 @@ blueprint:
     average_room_temperature:
       name: Average Room Temperature Sensor
       description: Sensor reporting the room's current average temperature.
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+    outside_temperature:
+      name: Outside Temperature Sensor
+      description: >
+        Sensor reporting the current outside temperature. Below 16°C, the
+        AC is never turned on, and is turned off if it's already running.
       selector:
         entity:
           domain: sensor
@@ -100,6 +112,7 @@ trigger_variables:
   target_temperature: !input target_temperature
   threshold: !input threshold
   average_room_temperature: !input average_room_temperature
+  outside_temperature: !input outside_temperature
   temperature_control: !input temperature_control
 
 trigger:
@@ -107,7 +120,8 @@ trigger:
     id: cool_on
     value_template: >
       {{ (states(average_room_temperature) | float(0)) > (states(target_temperature) | float(0) + threshold)
-         and is_state(temperature_control, 'on') }}
+         and is_state(temperature_control, 'on')
+         and (states(outside_temperature) | float(100)) >= 16 }}
   - platform: state
     id: control_off
     entity_id: !input temperature_control
@@ -116,6 +130,10 @@ trigger:
     id: cool_off
     value_template: >
       {{ (states(average_room_temperature) | float(0)) <= (states(target_temperature) | float(0) - threshold) }}
+  - platform: template
+    id: outside_cold
+    value_template: >
+      {{ (states(outside_temperature) | float(100)) < 16 }}
 
 variables:
   target_temperature: !input target_temperature
@@ -147,6 +165,7 @@ action:
             id:
               - control_off
               - cool_off
+              - outside_cold
         sequence:
           - service: zha.issue_zigbee_cluster_command
             data:

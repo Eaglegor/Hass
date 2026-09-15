@@ -43,6 +43,14 @@ blueprint:
           step: 1
           unit_of_measurement: s
           mode: box
+    stack_notifications:
+      name: Stack Notifications
+      description: >
+        Whether new notifications stack on top of the current one instead
+        of replacing it (sets the "stack" field in the notify payload).
+      default: false
+      selector:
+        boolean: {}
 
 description: !input tool_description
 
@@ -77,11 +85,16 @@ sequence:
       device_topic_sensor: !input device_topic_sensor
       mqtt_topic_prefix: "{{ states(device_topic_sensor) }}"
       default_duration: !input default_duration
+      stack_notifications: !input stack_notifications
   - service: mqtt.publish
     data:
       topic: "{{ mqtt_topic_prefix }}/notify"
       payload: >
-        {% set payload = {'text': text, 'duration': (duration | default(default_duration, true) | int)} %}
+        {% set payload = {
+             'text': text | replace('—', '-'),
+             'duration': (duration | default(default_duration, true) | int),
+             'stack': stack_notifications
+           } %}
         {% if icon is defined and icon %}
           {% set payload = dict(payload, icon=icon) %}
         {% endif %}

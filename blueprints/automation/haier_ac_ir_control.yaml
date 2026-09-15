@@ -1,0 +1,160 @@
+blueprint:
+  name: Haier AC IR Control (TS1201)
+  description: >
+    Controls a Haier air conditioner (cooling mode) over a Zigbee TS1201 IR
+    blaster, structured like Humidity Control but for temperature and
+    driven by a lookup table of per-degree IR codes instead of a direct
+    setpoint service call.
+
+    - While the control switch is on and the room's average temperature
+      rises above target_temperature + threshold, the AC is turned on by
+      sending the IR code for target_temperature (rounded to the nearest
+      whole degree, clamped to the codes available in temperature_codes).
+    - When the control switch turns off, the AC is turned off (the 'off'
+      code is sent).
+    - When the room's average temperature drops to target_temperature -
+      threshold or below, the AC is turned off.
+  domain: automation
+  input:
+    target_temperature:
+      name: Target Temperature
+      description: >
+        Number helper (input_number or number entity) holding the desired
+        room temperature, in °C. Expose it on a dashboard to adjust the
+        target at runtime.
+      selector:
+        entity:
+          domain:
+            - input_number
+            - number
+    threshold:
+      name: Threshold
+      description: >
+        Allowed deviation from target_temperature, in °C, before the AC is
+        turned on or off.
+      selector:
+        number:
+          min: 0
+          max: 10
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: box
+    average_room_temperature:
+      name: Average Room Temperature Sensor
+      description: Sensor reporting the room's current average temperature.
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+    temperature_control:
+      name: Temperature Control Switch
+      description: >
+        Master on/off toggle (input_boolean helper or switch entity) for
+        this AC control loop, controlled by the user or another automation.
+        Expose it on a dashboard. When off, the AC is forced off regardless
+        of temperature readings.
+      selector:
+        entity:
+          domain:
+            - input_boolean
+            - switch
+    remote_device:
+      name: Remote Control Device (TS1201)
+      description: >
+        The Zigbee TS1201 IR blaster device (paired via ZHA) that will
+        transmit the IR codes to the AC.
+      selector:
+        device:
+          integration: zha
+    temperature_codes:
+      name: Temperature IR Codes
+      description: >
+        Map of setpoint (as a one-decimal string, e.g. "22.0") to the
+        learned IR code for that temperature, plus an "off" entry for the
+        power-off code. Defaults to the codes captured for this Haier
+        remote; override if you're reusing this blueprint with different
+        learned codes.
+      default:
+        "16.0": AQgMQAEHdhEmApMGJgJAAcAHQAFAC0AD4BMB4Bcf4CMB4BNLwBvAB+AvAeA3P+ATAQFaAuARA+ArAcCrQAdAA0AB4AMHC5MGJgImAiYCkwYmAg==
+        "17.0": ARMMQAEHTBEmApQGJgJAAcAHQAFAC0AD4AcB4AMT4AML4DcB4BNLwBvAB+AvAeALPwFWAuARA+BzAUCrQJtAB0ADQAFAB+ADAwcmAiYClAYmAg==
+        "18.0": AQYMQAEHhREnApMGJwJAAcAHQAFAC0AD4AMB4BcP4DMB4Adb4AMBwBvAB+AvAeA3P+ATAQJbAifgRAHAq0AHwAPAAeADDwOTBicC
+        "19.0": AQgMQAEHdhEoApAGKAJAAcAHQAFAC0AD4AMBQA9AA8AB4AML4DcB4BNLwBvAB+AvAeA3P+BjAcCrQAfAA0ABwAsLkAYoAigCKAKQBigC
+        "20.0": AQgMQAEHbREnApAGJwJAAcAHQAFAC0ADwAHgAwvAAeALE+AvAeATS8AbwAfgLwHgBz8CWAInYAFAB+ADA+B7AUCrQJNAB+ADA0ABwA8HJwInApAGJwI=
+        "21.0": AeULQAEHZxEoApIGKAJAAcAHQAFAC0ADwAHAC8AHQAHgAwvgNwHgE0vAG8AH4C8B4Dc/4GMBwKtAB+APAwcoAigCkgYoAg==
+        "22.0": AQcMQAELeRE3AowGNwIOAjcCwAfACwGMBkAJgAMCjAY3YAMBDgLgAQNAE+APAUAnATcCQAXgEwNAAYAf4AdLAQ4C4AEDQBtAD0AH4AEBQBHgJQNAPwIOAjfgCAHgCxOAAcAZQAfgJQMDjgIOAuAnM+ADLwSMBg4CNyABBYwGNwI3AkAL4AEDAYwGgAMHNwIOAowGDgI=
+        "23.0": AfgLQAEHYREmApQGJgJAAcAHQAFAC0ADwAFAC8ADwAFAD+A/AeATS8AbwAfgIwECWQImYAFAB+ArP+BXAUCX4AMBQA9AA8CrwAfAAUAPwAMHJgImApQGJgI=
+        "24.0": AQMMQAEHaREnApMGJwJAAcAHQAFAC0ADQAHAB+AHAeAPF+ArAeATS8AbwAfgLwHgNz/gYwFAqwNdAicCQAfAAcALQAcLkwYnAicCJwKTBicC
+        "25.0": AQIMQAEHcREnAo0GJwJAAcAHQAFAC0ADQAHAB0AB4A8L4DcB4ANX4AcBwBvAB+AvAeArPwJbAifgCAHgCxPgRwHAq8AHQHNAC+ADAwcnAicCjQYnAg==
+        "26.0": AfkLQAEHaREnApQGJwJAAcAHQAFAC0ADQAHgBwfAAcAX4DsB4BNLwBvAB+AvAeA3P+AzAQJbAidgAcAHQAHgAwvgBwHAq+AHB0ABQBMLlAYnAicCJwKUBicC
+        "27.0": AQgMQAEHahEnApQGJwJAAcAHQAFAC0ADQAHgAwfAC0AB4AML4DcB4BNLwBvAB+AvAeA3P+BjAcCr4AsHQBMLlAYnAicCJwKUBicC
+        "28.0": AeMLQAEHbREnApQGJwJAAcAHQAFAC0ADQAFAB0AD4AcB4AsT4C8B4BNLwBvAB+AvAUA/AlsCJ+CcAUCrQAHgAwfgDAsCBicC
+        "29.0": AQMMQAEHZRElApYGJQJAAcAHQAFAC0ADQAFAB0ADQAHAB0AB4AML4DcB4BNLwBvAB+ADAQJXAiXgIAHgCz/gQwFAi8ADQAHAC8AH4CMBwKvgAwdAC+ADAwclAiUClgYlAg==
+        "30.0": AQUMQAEHihEmApEGJgJAAcAHQAFAC0ADQAFAB8AD4AMBQBPgPwHgE0vAG8AH4C8B4Bc/AlgCJuAEAUAP4AMD4GMBwKtAB0AD4AMBQA8LkQYmAiYCJgKRBiYC
+        "off": ARMMQAEPRBEmAn8GSgImAkoCfwYmAsABQAtAA8ABAX8G4AUf4GsBA38GJgLgDQEBSgLgBQNAAeAHEwFKAuARP+ABAQJKAibgCAHgCxPgQQHAXUAH4AEDwKvgBwdAAeADEwN/BiYC
+      selector:
+        object: {}
+
+mode: restart
+
+trigger_variables:
+  target_temperature: !input target_temperature
+  threshold: !input threshold
+  average_room_temperature: !input average_room_temperature
+  temperature_control: !input temperature_control
+
+trigger:
+  - platform: template
+    id: cool_on
+    value_template: >
+      {{ (states(average_room_temperature) | float(0)) > (states(target_temperature) | float(0) + threshold)
+         and is_state(temperature_control, 'on') }}
+  - platform: state
+    id: control_off
+    entity_id: !input temperature_control
+    to: "off"
+  - platform: template
+    id: cool_off
+    value_template: >
+      {{ (states(average_room_temperature) | float(0)) <= (states(target_temperature) | float(0) - threshold) }}
+
+variables:
+  target_temperature: !input target_temperature
+  remote_device: !input remote_device
+  remote_ieee: "{{ device_attr(remote_device, 'identifiers') | list | first | last }}"
+  temperature_codes: !input temperature_codes
+
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: cool_on
+        sequence:
+          - service: zha.issue_zigbee_cluster_command
+            data:
+              ieee: "{{ remote_ieee }}"
+              endpoint_id: 1
+              cluster_id: 57348
+              cluster_type: in
+              command: 2
+              command_type: server
+              params:
+                code: >
+                  {% set setpoint = [16, [30, states(target_temperature) | float(0) | round(0)] | min] | max %}
+                  {% set key = '%.1f' | format(setpoint) %}
+                  {{ temperature_codes.get(key, temperature_codes['off']) }}
+      - conditions:
+          - condition: trigger
+            id:
+              - control_off
+              - cool_off
+        sequence:
+          - service: zha.issue_zigbee_cluster_command
+            data:
+              ieee: "{{ remote_ieee }}"
+              endpoint_id: 1
+              cluster_id: 57348
+              cluster_type: in
+              command: 2
+              command_type: server
+              params:
+                code: "{{ temperature_codes['off'] }}"

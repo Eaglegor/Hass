@@ -58,12 +58,15 @@ blueprint:
     humidity_control:
       name: Humidity Control Switch
       description: >
-        Master on/off switch for this humidity control loop, controlled by
-        the user or another automation. When off, the humidifier is forced
-        off regardless of humidity readings.
+        Master on/off toggle (input_boolean helper or switch entity) for
+        this humidity control loop, controlled by the user or another
+        automation. Expose it on a dashboard. When off, the humidifier is
+        forced off regardless of humidity readings.
       selector:
         entity:
-          domain: switch
+          domain:
+            - input_boolean
+            - switch
     humidifier:
       name: Humidifier
       description: The actual humidifier device to turn on/off and set the target humidity on.

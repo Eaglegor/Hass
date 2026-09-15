@@ -30,13 +30,15 @@ blueprint:
     door_sensor:
       name: Door Sensor (optional)
       description: >
-        Optional door sensor. If set, opening the door also turns the
-        lights on (independent of the presence sensors).
+        Optional door/window/opening contact sensor (e.g. an Aqara sensor
+        such as lumi.magnet.agl02). If set, opening it also turns the
+        lights on (independent of the presence sensors). Not filtered by
+        device class, since contact sensors aren't always classified as
+        door/window/opening.
       default: []
       selector:
         entity:
           domain: binary_sensor
-          device_class: door
           multiple: true
     lights:
       name: Lights

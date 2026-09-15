@@ -1,15 +1,17 @@
 blueprint:
   name: Presence Lighting
   description: >
-    Turns on a group of lights when an "acquire" presence sensor detects
+    Turns on a group of lights when any "acquire" presence sensor detects
     presence, and turns them off when a "release" presence sensor stops
-    detecting presence. Optionally, also turns the lights on when a door
-    sensor opens.
+    detecting presence and *all* release sensors are then clear. Optionally,
+    also turns the lights on when a door/window sensor opens.
   domain: automation
   input:
-    acquire_sensor:
-      name: Acquire Sensor
-      description: Presence/motion sensor that turns the lights on when it becomes active.
+    acquire_sensors:
+      name: Acquire Sensors
+      description: >
+        One or more presence/motion sensors. The lights turn on as soon as
+        any one of them becomes active.
       selector:
         entity:
           domain: binary_sensor
@@ -17,9 +19,13 @@ blueprint:
             - occupancy
             - motion
             - presence
-    release_sensor:
-      name: Release Sensor
-      description: Presence/motion sensor that turns the lights off when it becomes inactive.
+          multiple: true
+    release_sensors:
+      name: Release Sensors
+      description: >
+        One or more presence/motion sensors. The lights turn off once one
+        of them becomes inactive, provided all release sensors are inactive
+        at that point (i.e. nothing is still detecting presence).
       selector:
         entity:
           domain: binary_sensor
@@ -27,6 +33,7 @@ blueprint:
             - occupancy
             - motion
             - presence
+          multiple: true
     door_sensor:
       name: Door Sensor (optional)
       description: >
@@ -52,11 +59,11 @@ mode: restart
 
 trigger:
   - platform: state
-    entity_id: !input acquire_sensor
+    entity_id: !input acquire_sensors
     to: "on"
     id: acquire
   - platform: state
-    entity_id: !input release_sensor
+    entity_id: !input release_sensors
     to: "off"
     id: release
   - platform: state
@@ -77,6 +84,9 @@ action:
       - conditions:
           - condition: trigger
             id: release
+          - condition: state
+            entity_id: !input release_sensors
+            state: "off"
         sequence:
           - service: light.turn_off
             target: !input lights

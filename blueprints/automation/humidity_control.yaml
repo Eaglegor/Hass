@@ -110,10 +110,10 @@ action:
             target: !input humidifier
             data:
               humidity: >
-                {{ (target_humidity | float(0)
-                    + (states(humidifier_humidity_value) | float(0)
-                       - states(average_room_humidity) | float(0)))
-                   | round(0) | int }}
+                {% set raw = target_humidity | float(0)
+                   + (states(humidifier_humidity_value) | float(0)
+                      - states(average_room_humidity) | float(0)) %}
+                {{ [0, [100, raw | round(0) | int] | min] | max }}
       - conditions:
           - condition: trigger
             id:

@@ -17,6 +17,8 @@ blueprint:
     - The AC is never turned on while outside_temperature is below 16°C,
       and is turned off if it drops below 16°C while the AC is running
       (cooling makes no sense once it's that cold outside).
+    - The AC is never turned on while any sensor in window_sensors is
+      open, and is turned off if one opens while the AC is running.
   domain: automation
   input:
     target_temperature:
@@ -58,6 +60,19 @@ blueprint:
         entity:
           domain: sensor
           device_class: temperature
+    window_sensors:
+      name: Window Sensors (optional)
+      description: >
+        Optional list of window/door contact sensors (binary_sensor). If
+        any of them is open, the AC is never turned on, and is turned off
+        if it's already running -- same handling as outside_temperature
+        below 16°C. Not filtered by device class, since contact sensors
+        aren't always classified as door/window/opening.
+      default: []
+      selector:
+        entity:
+          domain: binary_sensor
+          multiple: true
     temperature_control:
       name: Temperature Control Switch
       description: >
@@ -113,6 +128,7 @@ trigger_variables:
   threshold: !input threshold
   average_room_temperature: !input average_room_temperature
   outside_temperature: !input outside_temperature
+  window_sensors: !input window_sensors
   temperature_control: !input temperature_control
 
 trigger:
@@ -121,7 +137,8 @@ trigger:
     value_template: >
       {{ (states(average_room_temperature) | float(0)) > (states(target_temperature) | float(0) + threshold)
          and is_state(temperature_control, 'on')
-         and (states(outside_temperature) | float(100)) >= 16 }}
+         and (states(outside_temperature) | float(100)) >= 16
+         and (expand(window_sensors) | selectattr('state', 'eq', 'on') | list | count == 0) }}
   - platform: state
     id: control_off
     entity_id: !input temperature_control
@@ -134,6 +151,10 @@ trigger:
     id: outside_cold
     value_template: >
       {{ (states(outside_temperature) | float(100)) < 16 }}
+  - platform: template
+    id: window_open
+    value_template: >
+      {{ expand(window_sensors) | selectattr('state', 'eq', 'on') | list | count > 0 }}
 
 variables:
   target_temperature: !input target_temperature
@@ -166,6 +187,7 @@ action:
               - control_off
               - cool_off
               - outside_cold
+              - window_open
         sequence:
           - service: zha.issue_zigbee_cluster_command
             data:

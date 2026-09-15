@@ -14,9 +14,10 @@ blueprint:
       code is sent).
     - When the room's average temperature drops to target_temperature -
       threshold or below, the AC is turned off.
-    - The AC is never turned on while outside_temperature is below 16°C,
-      and is turned off if it drops below 16°C while the AC is running
-      (cooling makes no sense once it's that cold outside).
+    - The AC is never turned on while outside_temperature is below
+      outside_temperature_threshold, and is turned off if it drops below
+      that threshold while the AC is running (cooling makes no sense once
+      it's that cold outside).
     - The AC is never turned on while any sensor in window_sensors is
       open, and is turned off if one opens while the AC is running.
   domain: automation
@@ -54,20 +55,35 @@ blueprint:
     outside_temperature:
       name: Outside Temperature Sensor
       description: >
-        Sensor reporting the current outside temperature. Below 16°C, the
-        AC is never turned on, and is turned off if it's already running.
+        Sensor reporting the current outside temperature. Below
+        outside_temperature_threshold, the AC is never turned on, and is
+        turned off if it's already running.
       selector:
         entity:
           domain: sensor
           device_class: temperature
+    outside_temperature_threshold:
+      name: Outside Temperature Threshold
+      description: >
+        Below this outside temperature, the AC is never turned on, and is
+        turned off if it's already running (cooling makes no sense once
+        it's this cold outside).
+      default: 16
+      selector:
+        number:
+          min: -20
+          max: 30
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: box
     window_sensors:
       name: Window Sensors (optional)
       description: >
         Optional list of window/door contact sensors (binary_sensor). If
         any of them is open, the AC is never turned on, and is turned off
         if it's already running -- same handling as outside_temperature
-        below 16°C. Not filtered by device class, since contact sensors
-        aren't always classified as door/window/opening.
+        below outside_temperature_threshold. Not filtered by device class,
+        since contact sensors aren't always classified as door/window/opening.
       default: []
       selector:
         entity:
@@ -128,6 +144,7 @@ trigger_variables:
   threshold: !input threshold
   average_room_temperature: !input average_room_temperature
   outside_temperature: !input outside_temperature
+  outside_temperature_threshold: !input outside_temperature_threshold
   window_sensors: !input window_sensors
   temperature_control: !input temperature_control
 
@@ -137,7 +154,7 @@ trigger:
     value_template: >
       {{ (states(average_room_temperature) | float(0)) > (states(target_temperature) | float(0) + threshold)
          and is_state(temperature_control, 'on')
-         and (states(outside_temperature) | float(100)) >= 16
+         and (states(outside_temperature) | float(100)) >= (outside_temperature_threshold | float(0))
          and (expand(window_sensors) | selectattr('state', 'eq', 'on') | list | count == 0) }}
   - platform: state
     id: control_off
@@ -150,7 +167,7 @@ trigger:
   - platform: template
     id: outside_cold
     value_template: >
-      {{ (states(outside_temperature) | float(100)) < 16 }}
+      {{ (states(outside_temperature) | float(100)) < (outside_temperature_threshold | float(0)) }}
   - platform: template
     id: window_open
     value_template: >

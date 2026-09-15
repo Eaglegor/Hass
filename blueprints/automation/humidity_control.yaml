@@ -1,0 +1,124 @@
+blueprint:
+  name: Humidity Control
+  description: >
+    Drives a humidifier device to reach a target room humidity, gated by a
+    separate on/off "humidity control" switch that the user (or another
+    automation) flips independently of the humidifier itself.
+
+    - While the control switch is on and the room's average humidity drops
+      below target_humidity - threshold, the humidifier is turned on and
+      its target humidity is set to target_humidity, compensated for the
+      offset between the humidifier's own humidity reading and the room
+      average (target_humidity + (humidifier_humidity_value - average_room_humidity)).
+    - When the control switch turns off, the humidifier is turned off.
+    - When the room's average humidity reaches target_humidity + threshold
+      or above, the humidifier is turned off.
+  domain: automation
+  input:
+    target_humidity:
+      name: Target Humidity
+      description: Desired average room humidity, in percent.
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+          mode: box
+    threshold:
+      name: Threshold
+      description: >
+        Allowed deviation from target_humidity, in percentage points,
+        before the humidifier is turned on or off.
+      selector:
+        number:
+          min: 0
+          max: 50
+          step: 0.5
+          unit_of_measurement: "%"
+          mode: box
+    average_room_humidity:
+      name: Average Room Humidity Sensor
+      description: Sensor reporting the room's current average humidity.
+      selector:
+        entity:
+          domain: sensor
+          device_class: humidity
+    humidifier_humidity_value:
+      name: Humidifier Humidity Sensor
+      description: >
+        Sensor reporting the humidity value at/near the humidifier itself.
+        Used to compensate the setpoint sent to the humidifier for the
+        offset between its local reading and the room average.
+      selector:
+        entity:
+          domain: sensor
+          device_class: humidity
+    humidity_control:
+      name: Humidity Control Switch
+      description: >
+        Master on/off switch for this humidity control loop, controlled by
+        the user or another automation. When off, the humidifier is forced
+        off regardless of humidity readings.
+      selector:
+        entity:
+          domain: switch
+    humidifier:
+      name: Humidifier
+      description: The actual humidifier device to turn on/off and set the target humidity on.
+      selector:
+        entity:
+          domain: humidifier
+
+mode: restart
+
+trigger_variables:
+  target_humidity: !input target_humidity
+  threshold: !input threshold
+  average_room_humidity: !input average_room_humidity
+  humidity_control: !input humidity_control
+
+trigger:
+  - platform: template
+    id: low_humidity
+    value_template: >
+      {{ (states(average_room_humidity) | float(0)) < (target_humidity - threshold)
+         and is_state(humidity_control, 'on') }}
+  - platform: state
+    id: control_off
+    entity_id: !input humidity_control
+    to: "off"
+  - platform: template
+    id: high_humidity
+    value_template: >
+      {{ (states(average_room_humidity) | float(0)) >= (target_humidity + threshold) }}
+
+variables:
+  target_humidity: !input target_humidity
+  average_room_humidity: !input average_room_humidity
+  humidifier_humidity_value: !input humidifier_humidity_value
+
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: low_humidity
+        sequence:
+          - service: humidifier.turn_on
+            target: !input humidifier
+          - service: humidifier.set_humidity
+            target: !input humidifier
+            data:
+              humidity: >
+                {{ (target_humidity | float(0)
+                    + (states(humidifier_humidity_value) | float(0)
+                       - states(average_room_humidity) | float(0)))
+                   | round(0) | int }}
+      - conditions:
+          - condition: trigger
+            id:
+              - control_off
+              - high_humidity
+        sequence:
+          - service: humidifier.turn_off
+            target: !input humidifier

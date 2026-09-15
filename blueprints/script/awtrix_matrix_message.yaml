@@ -91,7 +91,7 @@ sequence:
       topic: "{{ mqtt_topic_prefix }}/notify"
       payload: >
         {% set payload = {
-             'text': text | replace('—', '-'),
+             'text': text | replace('—', '-') | replace('–', '-'),
              'duration': (duration | default(default_duration, true) | int),
              'stack': stack_notifications
            } %}

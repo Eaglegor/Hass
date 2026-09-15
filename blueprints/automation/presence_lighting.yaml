@@ -3,7 +3,8 @@ blueprint:
   description: >
     Turns on a group of lights when an "acquire" presence sensor detects
     presence, and turns them off when a "release" presence sensor stops
-    detecting presence.
+    detecting presence. Optionally, also turns the lights on when a door
+    sensor opens.
   domain: automation
   input:
     acquire_sensor:
@@ -26,6 +27,17 @@ blueprint:
             - occupancy
             - motion
             - presence
+    door_sensor:
+      name: Door Sensor (optional)
+      description: >
+        Optional door sensor. If set, opening the door also turns the
+        lights on (independent of the presence sensors).
+      default: []
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class: door
+          multiple: true
     lights:
       name: Lights
       description: The lights (entities, devices, or areas) to control as a group.
@@ -45,12 +57,18 @@ trigger:
     entity_id: !input release_sensor
     to: "off"
     id: release
+  - platform: state
+    entity_id: !input door_sensor
+    to: "on"
+    id: door
 
 action:
   - choose:
       - conditions:
           - condition: trigger
-            id: acquire
+            id:
+              - acquire
+              - door
         sequence:
           - service: light.turn_on
             target: !input lights

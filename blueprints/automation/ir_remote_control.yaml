@@ -1,0 +1,86 @@
+blueprint:
+  name: IR Remote Control (TS1201)
+  description: >
+    Sends a learned IR code over a Zigbee TS1201 IR blaster (via ZHA) when a
+    control switch turns on, and a different IR code when it turns off.
+    Uses zha.issue_zigbee_cluster_command against the Tuya IR cluster
+    (0xE004 / 57348, command 2), the same call used by manually authored
+    "send IR code" scripts for this device.
+  domain: automation
+  input:
+    entity_control:
+      name: Control Switch
+      description: >
+        Toggle (input_boolean helper or switch entity) that drives the IR
+        device. Turning it on sends turn_on_command_code; turning it off
+        sends turn_off_command_code.
+      selector:
+        entity:
+          domain:
+            - input_boolean
+            - switch
+    remote_device:
+      name: Remote Control Device (TS1201)
+      description: >
+        The Zigbee TS1201 IR blaster device (paired via ZHA) that will
+        transmit the IR codes.
+      selector:
+        device:
+          integration: zha
+    turn_on_command_code:
+      name: Turn On Command Code
+      description: The learned IR code (base64) to send when the control switch turns on.
+      selector:
+        text: {}
+    turn_off_command_code:
+      name: Turn Off Command Code
+      description: The learned IR code (base64) to send when the control switch turns off.
+      selector:
+        text: {}
+
+mode: restart
+
+trigger:
+  - platform: state
+    entity_id: !input entity_control
+    to: "on"
+    id: "on"
+  - platform: state
+    entity_id: !input entity_control
+    to: "off"
+    id: "off"
+
+variables:
+  remote_device: !input remote_device
+  remote_ieee: "{{ device_attr(remote_device, 'identifiers') | list | first | last }}"
+
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: "on"
+        sequence:
+          - service: zha.issue_zigbee_cluster_command
+            data:
+              ieee: "{{ remote_ieee }}"
+              endpoint_id: 1
+              cluster_id: 57348
+              cluster_type: in
+              command: 2
+              command_type: server
+              params:
+                code: !input turn_on_command_code
+      - conditions:
+          - condition: trigger
+            id: "off"
+        sequence:
+          - service: zha.issue_zigbee_cluster_command
+            data:
+              ieee: "{{ remote_ieee }}"
+              endpoint_id: 1
+              cluster_id: 57348
+              cluster_type: in
+              command: 2
+              command_type: server
+              params:
+                code: !input turn_off_command_code

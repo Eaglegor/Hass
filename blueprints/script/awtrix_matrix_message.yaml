@@ -1,0 +1,83 @@
+blueprint:
+  name: Matrix Clock Message (AWTRIX3)
+  description: >
+    An Assist/LLM tool script that displays a short text notification on
+    one specific AWTRIX3 matrix clock over MQTT (publishes to
+    "<prefix>/notify"). Instantiate this once per clock -- e.g. once per
+    voice assistant satellite paired 1:1 with its own clock -- then, on the
+    generated script, use Settings > Voice Assistants > Expose to expose
+    it only to that satellite's own conversation agent so its LLM can call
+    it as a tool after answering.
+  domain: script
+  input:
+    mqtt_topic_prefix:
+      name: AWTRIX3 MQTT Topic Prefix
+      description: >
+        This clock's MQTT prefix, set in the AWTRIX3 web UI under MQTT
+        settings (e.g. "awtrix_0942f4"). Messages are published to
+        "<prefix>/notify".
+      selector:
+        text: {}
+    tool_description:
+      name: Tool Description (for the LLM)
+      description: >
+        What the LLM sees for this tool -- explain which clock it is and
+        when to call it, e.g. "Displays a short caption on the bedroom
+        matrix clock. Call this after answering, whenever a short (under
+        30 character) caption would help."
+      selector:
+        text:
+          multiline: true
+    default_duration:
+      name: Default Display Duration (seconds)
+      description: How long a message stays on screen when a call doesn't override it.
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 120
+          step: 1
+          unit_of_measurement: s
+          mode: box
+
+description: !input tool_description
+
+fields:
+  text:
+    name: Text
+    description: Short text to display on the clock (aim for under 30 characters).
+    required: true
+    example: "It's raining"
+    selector:
+      text: {}
+  duration:
+    name: Duration
+    description: Seconds to show the message before it disappears.
+    required: false
+    selector:
+      number:
+        min: 1
+        max: 120
+        step: 1
+        unit_of_measurement: s
+        mode: box
+  icon:
+    name: Icon
+    description: Optional AWTRIX icon ID to show alongside the text.
+    required: false
+    selector:
+      text: {}
+
+sequence:
+  - variables:
+      mqtt_topic_prefix: !input mqtt_topic_prefix
+      default_duration: !input default_duration
+  - service: mqtt.publish
+    data:
+      topic: "{{ mqtt_topic_prefix }}/notify"
+      payload: >
+        {% set payload = {'text': text, 'duration': (duration | default(default_duration, true) | int)} %}
+        {% if icon is defined and icon %}
+          {% set payload = dict(payload, icon=icon) %}
+        {% endif %}
+        {{ payload | to_json }}

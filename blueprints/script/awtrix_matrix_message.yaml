@@ -3,21 +3,25 @@ blueprint:
   description: >
     An Assist/LLM tool script that displays a short text notification on
     one specific AWTRIX3 matrix clock over MQTT (publishes to
-    "<prefix>/notify"). Instantiate this once per clock -- e.g. once per
-    voice assistant satellite paired 1:1 with its own clock -- then, on the
-    generated script, use Settings > Voice Assistants > Expose to expose
-    it only to that satellite's own conversation agent so its LLM can call
-    it as a tool after answering.
+    "<prefix>/notify", where <prefix> is read from the clock's own
+    "Device topic" sensor). Instantiate this once per clock -- e.g. once
+    per voice assistant satellite paired 1:1 with its own clock -- then,
+    on the generated script, use Settings > Voice Assistants > Expose to
+    expose it only to that satellite's own conversation agent so its LLM
+    can call it as a tool after answering.
   domain: script
   input:
-    mqtt_topic_prefix:
-      name: AWTRIX3 MQTT Topic Prefix
+    device_topic_sensor:
+      name: Device Topic Sensor
       description: >
-        This clock's MQTT prefix, set in the AWTRIX3 web UI under MQTT
-        settings (e.g. "awtrix_0942f4"). Messages are published to
-        "<prefix>/notify".
+        This clock's "Device topic" sensor entity, created automatically
+        by the AWTRIX3 MQTT device (shown on its device page under
+        Sensors, e.g. "awtrix_clock_1"). Its state is read at call time to
+        build the "<prefix>/notify" publish topic, so it stays correct
+        even if the device's topic ever changes.
       selector:
-        text: {}
+        entity:
+          domain: sensor
     tool_description:
       name: Tool Description (for the LLM)
       description: >
@@ -70,7 +74,8 @@ fields:
 
 sequence:
   - variables:
-      mqtt_topic_prefix: !input mqtt_topic_prefix
+      device_topic_sensor: !input device_topic_sensor
+      mqtt_topic_prefix: "{{ states(device_topic_sensor) }}"
       default_duration: !input default_duration
   - service: mqtt.publish
     data:

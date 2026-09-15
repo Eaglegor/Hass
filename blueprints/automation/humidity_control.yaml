@@ -8,8 +8,8 @@ blueprint:
     - While the control switch is on and the room's average humidity drops
       below target_humidity - threshold, the humidifier is turned on and
       its target humidity is set to target_humidity, compensated for the
-      offset between the humidifier's own humidity reading and the room
-      average (target_humidity + (humidifier_humidity_value - average_room_humidity)).
+      offset between the humidifier's own current_humidity reading and the
+      room average (target_humidity + (humidifier's current_humidity - average_room_humidity)).
     - When the control switch turns off, the humidifier is turned off.
     - When the room's average humidity reaches target_humidity + threshold
       or above, the humidifier is turned off.
@@ -45,16 +45,6 @@ blueprint:
         entity:
           domain: sensor
           device_class: humidity
-    humidifier_humidity_value:
-      name: Humidifier Humidity Sensor
-      description: >
-        Sensor reporting the humidity value at/near the humidifier itself.
-        Used to compensate the setpoint sent to the humidifier for the
-        offset between its local reading and the room average.
-      selector:
-        entity:
-          domain: sensor
-          device_class: humidity
     humidity_control:
       name: Humidity Control Switch
       description: >
@@ -69,7 +59,10 @@ blueprint:
             - switch
     humidifier:
       name: Humidifier
-      description: The actual humidifier device to turn on/off and set the target humidity on.
+      description: >
+        The actual humidifier device to turn on/off and set the target
+        humidity on. Its current_humidity attribute is read directly to
+        compensate the setpoint (must be a humidifier entity that reports it).
       selector:
         entity:
           domain: humidifier
@@ -100,7 +93,7 @@ trigger:
 variables:
   target_humidity: !input target_humidity
   average_room_humidity: !input average_room_humidity
-  humidifier_humidity_value: !input humidifier_humidity_value
+  humidifier: !input humidifier
 
 action:
   - choose:
@@ -117,7 +110,7 @@ action:
             data:
               humidity: >
                 {% set raw = states(target_humidity) | float(0)
-                   + (states(humidifier_humidity_value) | float(0)
+                   + (state_attr(humidifier, 'current_humidity') | float(0)
                       - states(average_room_humidity) | float(0)) %}
                 {{ [0, [100, raw | round(0) | int] | min] | max }}
       - conditions:

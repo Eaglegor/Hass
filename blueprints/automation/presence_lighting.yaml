@@ -1,0 +1,62 @@
+blueprint:
+  name: Presence Lighting
+  description: >
+    Turns on a group of lights when an "acquire" presence sensor detects
+    presence, and turns them off when a "release" presence sensor stops
+    detecting presence.
+  domain: automation
+  input:
+    acquire_sensor:
+      name: Acquire Sensor
+      description: Presence/motion sensor that turns the lights on when it becomes active.
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class:
+            - occupancy
+            - motion
+            - presence
+    release_sensor:
+      name: Release Sensor
+      description: Presence/motion sensor that turns the lights off when it becomes inactive.
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class:
+            - occupancy
+            - motion
+            - presence
+    lights:
+      name: Lights
+      description: The lights (entities, devices, or areas) to control as a group.
+      selector:
+        target:
+          entity:
+            domain: light
+
+mode: restart
+
+trigger:
+  - platform: state
+    entity_id: !input acquire_sensor
+    to: "on"
+    id: acquire
+  - platform: state
+    entity_id: !input release_sensor
+    to: "off"
+    id: release
+
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: acquire
+        sequence:
+          - service: light.turn_on
+            target: !input lights
+      - conditions:
+          - condition: trigger
+            id: release
+        sequence:
+          - service: light.turn_off
+            target: !input lights

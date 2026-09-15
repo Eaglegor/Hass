@@ -109,9 +109,11 @@ action:
             id: low_humidity
         sequence:
           - service: humidifier.turn_on
-            target: !input humidifier
+            target:
+              entity_id: !input humidifier
           - service: humidifier.set_humidity
-            target: !input humidifier
+            target:
+              entity_id: !input humidifier
             data:
               humidity: >
                 {% set raw = states(target_humidity) | float(0)
@@ -125,4 +127,5 @@ action:
               - high_humidity
         sequence:
           - service: humidifier.turn_off
-            target: !input humidifier
+            target:
+              entity_id: !input humidifier

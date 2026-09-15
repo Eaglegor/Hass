@@ -17,14 +17,15 @@ blueprint:
   input:
     target_humidity:
       name: Target Humidity
-      description: Desired average room humidity, in percent.
+      description: >
+        Number helper (input_number or number entity) holding the desired
+        average room humidity, in percent. Expose it on a dashboard to
+        adjust the target at runtime.
       selector:
-        number:
-          min: 0
-          max: 100
-          step: 1
-          unit_of_measurement: "%"
-          mode: box
+        entity:
+          domain:
+            - input_number
+            - number
     threshold:
       name: Threshold
       description: >
@@ -82,7 +83,7 @@ trigger:
   - platform: template
     id: low_humidity
     value_template: >
-      {{ (states(average_room_humidity) | float(0)) < (target_humidity - threshold)
+      {{ (states(average_room_humidity) | float(0)) < (states(target_humidity) | float(0) - threshold)
          and is_state(humidity_control, 'on') }}
   - platform: state
     id: control_off
@@ -91,7 +92,7 @@ trigger:
   - platform: template
     id: high_humidity
     value_template: >
-      {{ (states(average_room_humidity) | float(0)) >= (target_humidity + threshold) }}
+      {{ (states(average_room_humidity) | float(0)) >= (states(target_humidity) | float(0) + threshold) }}
 
 variables:
   target_humidity: !input target_humidity
@@ -110,7 +111,7 @@ action:
             target: !input humidifier
             data:
               humidity: >
-                {% set raw = target_humidity | float(0)
+                {% set raw = states(target_humidity) | float(0)
                    + (states(humidifier_humidity_value) | float(0)
                       - states(average_room_humidity) | float(0)) %}
                 {{ [0, [100, raw | round(0) | int] | min] | max }}

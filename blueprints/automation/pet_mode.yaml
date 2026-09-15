@@ -1,0 +1,69 @@
+blueprint:
+  name: Pet Mode
+  description: >
+    While pet_mode_switch is on, suspends a chosen list of automations
+    (e.g. ones that might scare or disturb a pet, like presence-triggered
+    lighting). The automations are turned back on either when the switch
+    is manually turned off, or automatically at reactivation_time on the
+    following day, whichever happens first -- in the latter case,
+    pet_mode_switch is also turned back off.
+  domain: automation
+  input:
+    pet_mode_switch:
+      name: Pet Mode Switch
+      description: >
+        Toggle (input_boolean helper or switch entity) that activates pet
+        mode when turned on.
+      selector:
+        entity:
+          domain:
+            - input_boolean
+            - switch
+    automations:
+      name: Automations to Suspend
+      description: The automations to turn off while pet mode is active.
+      selector:
+        entity:
+          domain: automation
+          multiple: true
+    reactivation_time:
+      name: Reactivation Time
+      description: >
+        Time of day, on the day after pet mode was activated, at which the
+        suspended automations are automatically turned back on (and
+        pet_mode_switch is turned off) if it hasn't been turned off
+        already.
+      selector:
+        time: {}
+
+mode: restart
+
+trigger:
+  - platform: state
+    entity_id: !input pet_mode_switch
+    to: "on"
+
+variables:
+  reactivation_time: !input reactivation_time
+
+action:
+  - service: automation.turn_off
+    target:
+      entity_id: !input automations
+  - wait_for_trigger:
+      - platform: state
+        entity_id: !input pet_mode_switch
+        to: "off"
+    timeout: >
+      {{ (today_at(reactivation_time) + timedelta(days=1) - now()).total_seconds() }}
+    continue_on_timeout: true
+  - service: automation.turn_on
+    target:
+      entity_id: !input automations
+  - if:
+      - condition: template
+        value_template: "{{ wait.trigger is none }}"
+    then:
+      - service: homeassistant.turn_off
+        target:
+          entity_id: !input pet_mode_switch

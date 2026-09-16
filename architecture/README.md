@@ -24,19 +24,32 @@ The same pipeline stages (wake word, VAD, STT, TTS) can run in two different pla
 
 ### Tier B — thick satellite (e.g. Intel N150 mini PC as satellite)
 
-- Runs wake word, VAD, STT, and TTS locally on the satellite itself — either the same VAD/STT/TTS software packaged to run on-device, or a dedicated local stack (e.g. `wyoming-satellite` + `faster-whisper`/whisper.cpp + Piper + a local VAD).
+- Runs wake word, VAD, STT, and TTS locally on the satellite itself (e.g. `faster-whisper`/whisper.cpp + Piper + a local VAD).
 - Only the recognized text (request) and, on the way back, the response text cross the network. HA and the LLM connector never see raw audio for these devices — the satellite hands HA an already-processed command and speaks HA's text reply itself.
 - Not dependent on the central VAD/STT/TTS containers being reachable; needs a capable device to run local inference at acceptable latency.
+- **Implemented as a self-built satellite app** — see rationale below, since the off-the-shelf options don't currently give this shape.
 
-Both tiers converge at the same point: HA's Assist pipeline passes the transcript to the conversation agent → **LargeLanguageModelConnector**, and gets text back. Tier A then plays that response through the central TTS container; Tier B synthesizes it locally.
+Both tiers converge at the same point: HA's conversation agent takes the transcript → **LargeLanguageModelConnector**, and gets text back. Tier A then plays that response through the central TTS container; Tier B synthesizes it locally.
 
-### How this is configured in HA
+### Why Tier B needs a self-built satellite app
 
-HA's Assist pipeline model, together with the [`wyoming-satellite`](https://github.com/rhasspy/wyoming-satellite) project, already supports this per device: a satellite advertises which stages (wake/VAD/STT/TTS) it handles locally vs. delegates to HA's configured services.
+The natural off-the-shelf choice for a fully local satellite, [`wyoming-satellite`](https://github.com/rhasspy/wyoming-satellite) (point its wake/VAD/STT/TTS stages at `localhost` instead of a remote Wyoming service), is now **deprecated**. Its own README says it "is no longer maintained as it has been replaced by [Linux Voice Assistant](https://github.com/OHF-Voice/linux-voice-assistant), which uses the ESPHome protocol."
 
-- Tier A devices are left at HA's defaults, which point at the central VAD/STT/TTS containers.
-- Tier B devices run their own local wake/VAD/STT/TTS stack and are configured (in their `wyoming-satellite` config) to handle those stages locally, so HA only ever gets invoked for the conversation step.
-- Both show up as `assist_satellite` entities in HA; automations built on top don't need to know or care which tier a given device is.
+That replacement doesn't give us Tier B's shape, though: Linux Voice Assistant only runs wake word detection and mic preprocessing (noise suppression/AGC) locally — STT and TTS still go through HA's Assist pipeline over the ESPHome API, the same as Tier A. It's a nicer Tier A satellite, not a Tier B one.
+
+So for genuine "HA only sees finished text" behavior, Tier B is a **small custom satellite service** we build ourselves:
+
+- Local wake word + VAD + STT + TTS running on the N150 (can literally reuse the same STT/TTS engine code/images built for the central `SpeechToTextEngine`/`TextToSpeechEngine` containers, just deployed locally instead of centrally).
+- Talks to HA over its plain REST API — `POST /api/conversation/process` (or the `conversation.process` service via `/api/services/conversation/process`) — sending the transcript and getting the response text back. No Wyoming/ESPHome satellite protocol involved for this tier.
+- Registered in HA as a long-lived access token client rather than an `assist_satellite` entity, since we're bypassing HA's audio pipeline entirely.
+
+This is a build-and-maintain-ourselves component, unlike everything else in this doc — accepted trade-off for keeping raw audio off the network for these devices. Revisit if OHF ships local STT/TTS support in Linux Voice Assistant later.
+
+### How this is configured
+
+- Tier A devices are left at HA's defaults (Wyoming or ESPHome voice-assistant integration), which route audio through the central VAD/STT/TTS containers.
+- Tier B devices run the custom local satellite app described above and only ever hit HA's conversation REST endpoint.
+- Both eventually produce a spoken response for the user; from an automations/dashboard perspective in HA, Tier A devices show up as `assist_satellite` entities while Tier B devices are just another conversation client — that asymmetry is worth keeping in mind when building anything that assumes all voice devices are `assist_satellite` entities.
 
 ## Components
 
@@ -77,7 +90,7 @@ flowchart TB
     LLM -->|routes per model| LocalLLM["Local LLM\n(e.g. Ollama)"]
     TTS -->|audio| SatA
 
-    SatB["Tier B: thick satellite\n(Intel N150, local wake/VAD/STT/TTS)"] -->|recognized text| HA
+    SatB["Tier B: thick satellite\n(Intel N150, custom app,\nlocal wake/VAD/STT/TTS)"] -->|"POST /api/conversation/process\n(transcript)"| HA
     HA -->|response text| SatB
 ```
 
@@ -93,18 +106,18 @@ flowchart TB
 
 ### Tier B (thick satellite, e.g. N150)
 
-1. A Tier B satellite runs its own local wake word, VAD, and STT. It only contacts HA once it already has a final transcript — HA never receives raw audio from this device.
-2. HA's conversation agent takes that transcript straight to **LargeLanguageModelConnector**, same as Tier A step 4.
-3. The LLM response text is sent back to the satellite as text; the satellite synthesizes it with its own local TTS and plays it — the central `TextToSpeechEngine` container is not involved.
+1. The custom Tier B satellite app runs its own local wake word, VAD, and STT. It only contacts HA once it already has a final transcript — HA never receives raw audio from this device.
+2. It calls HA's `conversation.process` REST endpoint directly with that transcript; HA's conversation agent takes it straight to **LargeLanguageModelConnector**, same as Tier A step 4.
+3. HA returns the response text in that same API call; the satellite synthesizes it with its own local TTS and plays it — the central `TextToSpeechEngine` container is not involved, and no Assist pipeline/satellite protocol is used for this tier.
 
 Each arrow above is a container-to-container (or satellite-to-container) API call inside/adjacent to `hass_net`; nothing here requires HA to know implementation details of STT/TTS/LLM providers — that's encapsulated behind each connector, and for Tier B, behind the satellite itself.
 
 ## Integration strategy per component
 
 - **VoiceActivityDetection / SpeechToTextEngine / TextToSpeechEngine** (Tier A): implement (or wrap) the [Wyoming protocol](https://github.com/rhasspy/wyoming) so HA's built-in Wyoming integration can be used as-is — no custom component to maintain. This is the preferred path for all three since HA has first-class support for Wyoming `stt`, `tts`, and `wake-word`/VAD services.
-- **Tier B satellites**: also speak Wyoming, but as a full [`wyoming-satellite`](https://github.com/rhasspy/wyoming-satellite) instance running locally, with its wake/VAD/STT/TTS stages set to "local" in its own config rather than pointing at the central containers. HA sees it as just another `assist_satellite` entity — no custom component needed here either.
+- **Tier B satellites**: no existing HA integration fits (`wyoming-satellite` is deprecated; its successor, Linux Voice Assistant, doesn't do local STT/TTS — see above), so this is the one deliberately self-implemented piece: a local service on the N150 talking to HA's plain `conversation.process` REST API, not any voice-satellite protocol.
 - **LargeLanguageModelConnector**: LiteLLM proxy exposes an OpenAI-compatible REST API, so HA's official `openai_conversation` integration (or `extended_openai_conversation` from HACS if more control over exposed entities/tools is needed) can point at it directly by overriding the API base URL. No custom component needed unless tool-calling against HA entities requires more than what those integrations expose.
-- Only fall back to a self-implemented custom component if a component can't speak Wyoming/REST in a way an existing integration supports.
+- Otherwise, only fall back to a self-implemented custom component if a component can't speak Wyoming/REST in a way an existing integration supports.
 
 ## Docker Compose shape (sketch)
 
@@ -146,11 +159,11 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
 ```
 
-Each first-party component (`vad`, `stt`, `tts`) lives in its own `services/<name>` directory with its own Dockerfile once implementation starts. This compose file covers the central host only; Tier B satellites (e.g. the N150) run their own separate deployment (own `wyoming-satellite` + local VAD/STT/TTS, likely also Docker-based) directly on the satellite hardware, outside this stack.
+Each first-party component (`vad`, `stt`, `tts`) lives in its own `services/<name>` directory with its own Dockerfile once implementation starts. This compose file covers the central host only; Tier B satellites (e.g. the N150) run their own separate deployment of the custom local satellite app (own local VAD/STT/TTS, likely also Docker-based) directly on the satellite hardware, outside this stack.
 
 ## Cross-cutting concerns (to flesh out later)
 
-- **Secrets**: cloud API keys (STT provider, LLM providers) via `.env` + Docker secrets, never baked into images or committed configs.
+- **Secrets**: cloud API keys (STT provider, LLM providers) via `.env` + Docker secrets, never baked into images or committed configs. Tier B satellites additionally need a long-lived HA access token to call `conversation.process` — scope it as narrowly as HA allows and treat it like any other credential.
 - **Networking**: single internal `hass_net` bridge network; only HA (and optionally a reverse proxy) exposed to the host/LAN. STT/TTS/VAD/LLM connector stay internal-only.
 - **Observability**: consider a shared logging/metrics story (e.g. container logs to `journald`/Loki) once the pipeline is running, so cloud-fallback events in STT are visible.
 - **Resource placement**: local STT/TTS/VAD models are the heaviest components — plan for GPU passthrough or a beefier host if local inference latency becomes the bottleneck; cloud fallback exists partly to hedge this.
@@ -164,3 +177,5 @@ Each first-party component (`vad`, `stt`, `tts`) lives in its own `services/<nam
 - Wake word handling for Tier A — local on the ESP32 (`micro_wake_word`) or via the central VoiceActivityDetection service?
 - Does the N150 need GPU/NPU acceleration to keep local STT/TTS latency acceptable, or is CPU inference (whisper.cpp/Piper) good enough?
 - Do Tier B satellites reuse the exact same STT/TTS container images as the central services (consistent behavior, larger footprint) or a separate, lighter-weight local stack?
+- What does the Tier B satellite app look like beyond STT/TTS/VAD: does it need its own wake-word engine (openWakeWord/microWakeWord running locally), and how is it packaged/deployed (systemd service vs. Docker Compose on the N150)?
+- Worth revisiting Tier B's approach if/when Linux Voice Assistant grows local STT/TTS support, to drop the self-maintained satellite app in favor of an upstream-maintained one.

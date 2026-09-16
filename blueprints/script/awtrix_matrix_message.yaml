@@ -9,6 +9,15 @@ blueprint:
     on the generated script, use Settings > Voice Assistants > Expose to
     expose it only to that satellite's own conversation agent so its LLM
     can call it as a tool after answering.
+
+    IMPORTANT: after creating the script, also open its own Description
+    field (Script Editor > settings/info, next to the name -- not the
+    blueprint's input form) and paste in the same text you used for
+    tool_description below. Home Assistant does not copy a blueprint's
+    internal description into the generated script's own entity
+    description automatically, and it's that entity-level description
+    the LLM tool exposure actually reads -- left blank, the LLM gets no
+    explanation of what the tool does or when to call it.
   domain: script
   input:
     device_topic_sensor:

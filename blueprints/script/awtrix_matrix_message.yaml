@@ -1,8 +1,8 @@
 blueprint:
   name: Matrix Clock Message (AWTRIX3)
   description: >
-    An Assist/LLM tool script that displays a short text notification on
-    one specific AWTRIX3 matrix clock over MQTT (publishes to
+    An Assist/LLM tool script that displays a short array of messages in
+    sequence on one specific AWTRIX3 matrix clock over MQTT (publishes to
     "<prefix>/notify", where <prefix> is read from the clock's own
     "Device topic" sensor). Instantiate this once per clock -- e.g. once
     per voice assistant satellite paired 1:1 with its own clock -- then,
@@ -12,12 +12,12 @@ blueprint:
 
     IMPORTANT: after creating the script, also open its own Description
     field (Script Editor > settings/info, next to the name -- not the
-    blueprint's input form) and paste in the same text you used for
-    tool_description below. Home Assistant does not copy a blueprint's
-    internal description into the generated script's own entity
-    description automatically, and it's that entity-level description
-    the LLM tool exposure actually reads -- left blank, the LLM gets no
-    explanation of what the tool does or when to call it.
+    blueprint's input form) and paste in the same text hardcoded below as
+    this blueprint's script description. Home Assistant does not copy a
+    blueprint's internal description into the generated script's own
+    entity description automatically, and it's that entity-level
+    description the LLM tool exposure actually reads -- left blank, the
+    LLM gets no explanation of what the tool does or when to call it.
   domain: script
   input:
     device_topic_sensor:
@@ -31,80 +31,90 @@ blueprint:
       selector:
         entity:
           domain: sensor
-    tool_description:
-      name: Tool Description (for the LLM)
+    min_display_time:
+      name: Minimum Display Time (seconds)
       description: >
-        What the LLM sees for this tool -- explain which clock it is and
-        when to call it, e.g. "Displays a short caption on the bedroom
-        matrix clock. Call this after answering, whenever a short (under
-        30 character) caption would help."
-      selector:
-        text:
-          multiline: true
-    default_duration:
-      name: Default Display Duration (seconds)
-      description: How long a message stays on screen when a call doesn't override it.
-      default: 10
+        Display duration for the shortest messages (8 characters or
+        fewer), and the basis for the delay between queued messages
+        (max(1, min_display_time - 1) seconds).
+      default: 5
       selector:
         number:
-          min: 1
-          max: 120
+          min: 3
+          max: 30
           step: 1
           unit_of_measurement: s
           mode: box
+    max_display_time:
+      name: Maximum Display Time (seconds)
+      description: Display duration for the longest messages (30 characters).
+      default: 15
+      selector:
+        number:
+          min: 1
+          max: 15
+          step: 1
+          unit_of_measurement: s
+          mode: box
+    first_message_stacking:
+      name: First Message Stacking
+      description: >
+        Whether the first message of a call stacks on top of whatever is
+        currently showing instead of replacing it. Every message after
+        the first always stacks, regardless of this setting.
+      default: false
+      selector:
+        boolean: {}
 
-description: !input tool_description
+description: >
+  This is a script to show short array of messages supporting answers on
+  matrix clock. Display short factual information: numbers, names, dates,
+  definitions etc.
+
+  If you display enumeration, put each entry into different array item.
+  Keep each item under 30 characters.
 
 fields:
-  text:
-    name: Text
-    description: Short text to display on the clock (aim for under 30 characters).
-    required: true
-    example: "It's raining"
-    selector:
-      text: {}
-  duration:
-    name: Duration
-    description: Seconds to show the message before it disappears.
-    required: false
-    selector:
-      number:
-        min: 1
-        max: 120
-        step: 1
-        unit_of_measurement: s
-        mode: box
-  icon:
-    name: Icon
-    description: Optional AWTRIX icon ID to show alongside the text.
-    required: false
-    selector:
-      text: {}
-  stack:
-    name: Stack
+  messages:
+    name: Messages
     description: >
-      If true, this notification stacks on top of the current one instead
-      of replacing it.
-    required: false
-    default: false
+      Array of short factual messages to display in sequence, one at a
+      time (each under 30 characters).
+    required: true
+    example: ["16-18 °C", "Cloudy"]
     selector:
-      boolean: {}
+      text:
+        multiple: true
+
+mode: restart
 
 sequence:
   - variables:
       device_topic_sensor: !input device_topic_sensor
       mqtt_topic_prefix: "{{ states(device_topic_sensor) }}"
-      default_duration: !input default_duration
-  - service: mqtt.publish
-    data:
-      topic: "{{ mqtt_topic_prefix }}/notify"
-      payload: >
-        {% set payload = {
-             'text': text | replace('—', '-') | replace('–', '-'),
-             'duration': (duration | default(default_duration, true) | int),
-             'stack': (stack | default(false, true) | bool)
-           } %}
-        {% if icon is defined and icon %}
-          {% set payload = dict(payload, icon=icon) %}
-        {% endif %}
-        {{ payload | to_json }}
+      min_display_time: !input min_display_time
+      max_display_time: !input max_display_time
+      first_message_stacking: !input first_message_stacking
+      inter_message_delay: "{{ [1, min_display_time - 1] | max }}"
+  - repeat:
+      for_each: "{{ messages }}"
+      sequence:
+        - variables:
+            msg: "{{ repeat.item | replace('—', '-') | replace('–', '-') }}"
+            msg_len: "{{ [8, [30, repeat.item | length] | min] | max }}"
+            msg_duration: >
+              {{ (min_display_time
+                  + (max_display_time - min_display_time) * (msg_len - 8) / 22)
+                 | round(0) | int }}
+            msg_stack: "{{ first_message_stacking if repeat.first else true }}"
+        - service: mqtt.publish
+          data:
+            topic: "{{ mqtt_topic_prefix }}/notify"
+            payload: >
+              {{ {'text': msg, 'duration': msg_duration, 'stack': msg_stack} | to_json }}
+        - if:
+            - condition: template
+              value_template: "{{ not repeat.last }}"
+          then:
+            - delay:
+                seconds: "{{ inter_message_delay }}"

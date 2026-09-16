@@ -81,7 +81,7 @@ fields:
       Array of short factual messages to display in sequence, one at a
       time (each under 30 characters).
     required: true
-    example: ["16-18 °C", "Cloudy"]
+    example: '["16-18 °C", "Cloudy"]'
     selector:
       text:
         multiple: true

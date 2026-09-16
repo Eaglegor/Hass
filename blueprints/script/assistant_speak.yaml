@@ -53,9 +53,10 @@ blueprint:
       name: Language
       description: >
         Language to speak in (e.g. "ru-ru", "en-gb"). Required by Home
-        Assistant Cloud's tts.speak call.
+        Assistant Cloud's tts.speak call. Find the exact code for your
+        language under Developer Tools > Actions > tts.speak.
       selector:
-        language: {}
+        text: {}
     voice:
       name: Voice
       description: >

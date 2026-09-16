@@ -49,6 +49,22 @@ blueprint:
       selector:
         entity:
           domain: media_player
+    language:
+      name: Language
+      description: >
+        Language to speak in (e.g. "ru-ru", "en-gb"). Required by Home
+        Assistant Cloud's tts.speak call.
+      selector:
+        language: {}
+    voice:
+      name: Voice
+      description: >
+        Voice name for Home Assistant Cloud TTS (e.g. "ru-RU-DmitryNeural").
+        Find valid names for your language under Developer Tools >
+        Actions > tts.speak > Voice, after picking this same TTS engine
+        and language there.
+      selector:
+        text: {}
 
 description: >
   This is the ONLY way to speak your reply out loud to the user. As soon
@@ -75,6 +91,8 @@ sequence:
   - variables:
       tts_engine: !input tts_engine
       media_player: !input media_player
+      language: !input language
+      voice: !input voice
   - service: tts.speak
     target:
       entity_id: "{{ tts_engine }}"
@@ -82,3 +100,6 @@ sequence:
       media_player_entity_id: "{{ media_player }}"
       message: "{{ text }}"
       cache: true
+      language: "{{ language }}"
+      options:
+        voice: "{{ voice }}"

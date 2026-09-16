@@ -25,7 +25,9 @@ The same pipeline stages (wake word, VAD, STT, TTS) can run in two different pla
 
 ### Tier B — thick satellite (e.g. Intel N150 mini PC as satellite)
 
-- Runs wake word, VAD, STT, and TTS locally on the satellite itself. Starts with the same engine choices as the central services (Vosk for STT, Silero for TTS) for consistent behavior, but — like those containers — the engine is swappable behind the same local API.
+**Scope: post-MVP.** Tier A + the central services + `LargeLanguageModelConnector` form the MVP; Tier B is designed for here at a high level, but detailed implementation is deferred until the MVP is working.
+
+- Runs wake word, VAD, STT, and TTS locally on the satellite itself, with its own engine choices — not necessarily Vosk/Silero. Which engines Tier B uses is configurable independently of the central services and can be decided later, per device if needed.
 - Only the recognized text (request) and, on the way back, the response text cross the network. HA and the LLM connector never see raw audio for these devices — the satellite hands HA an already-processed command and speaks HA's text reply itself.
 - Not dependent on the central VAD/STT/TTS containers being reachable; needs a capable device to run local inference at acceptable latency.
 - **Implemented as a self-built satellite app** — see rationale below, since the off-the-shelf options don't currently give this shape.
@@ -40,11 +42,11 @@ That replacement doesn't give us Tier B's shape, though: Linux Voice Assistant o
 
 So for genuine "HA only sees finished text" behavior, Tier B is a **small custom satellite service** we build ourselves:
 
-- Local wake word + VAD + STT + TTS running on the N150 (can literally reuse the same STT/TTS engine code/images built for the central `SpeechToTextEngine`/`TextToSpeechEngine` containers, just deployed locally instead of centrally).
+- Local wake word + VAD + STT + TTS running on the N150 — optionally reusing the same STT/TTS engine code/images built for the central `SpeechToTextEngine`/`TextToSpeechEngine` containers, deployed locally instead of centrally, but not required to; exact engines are a separate, later decision (see Decisions/Open questions).
 - Talks to HA over its plain REST API — `POST /api/conversation/process` (or the `conversation.process` service via `/api/services/conversation/process`) — sending the transcript and getting the response text back. No Wyoming/ESPHome satellite protocol involved for this tier.
 - Registered in HA as a long-lived access token client rather than an `assist_satellite` entity, since we're bypassing HA's audio pipeline entirely.
 
-This is a build-and-maintain-ourselves component, unlike everything else in this doc — accepted trade-off for keeping raw audio off the network for these devices. Revisit if OHF ships local STT/TTS support in Linux Voice Assistant later.
+This is a build-and-maintain-ourselves component, unlike everything else in this doc — accepted trade-off for keeping raw audio off the network for these devices. Keep the implementation as simple as it can be while meeting that requirement, and detailed design (packaging, exact wake-word engine, etc.) waits until Tier B work actually starts. Agreed: revisit this whole approach if/when OHF ships local STT/TTS support in Linux Voice Assistant, and drop the self-maintained app in favor of the upstream-maintained one at that point.
 
 ### How this is configured
 
@@ -172,23 +174,24 @@ Each first-party component (`vad`, `stt`, `tts`) lives in its own `services/<nam
 - **Secrets**: cloud API keys (STT provider, LLM providers) via `.env` + Docker secrets, never baked into images or committed configs. Tier B satellites additionally need a long-lived HA access token to call `conversation.process` — scope it as narrowly as HA allows and treat it like any other credential.
 - **Networking**: single internal `hass_net` bridge network; only HA (and optionally a reverse proxy) exposed to the host/LAN. STT/TTS/VAD/LLM connector stay internal-only.
 - **Observability**: consider a shared logging/metrics story (e.g. container logs to `journald`/Loki) once the pipeline is running, so cloud-fallback events in STT are visible.
-- **Resource placement**: local STT/TTS/VAD models are the heaviest components — plan for GPU passthrough or a beefier host if local inference latency becomes the bottleneck; cloud fallback exists partly to hedge this.
+- **Resource placement**: local STT/TTS/VAD models are the heaviest components. Minimal latency is a hard requirement, not just a nice-to-have — for the N150 specifically, plan to leverage its Intel iGPU for STT/TTS inference (e.g. via OpenVINO/oneDNN) rather than falling back to plain CPU inference. This may itself influence which STT/TTS engines are viable — worth checking iGPU/OpenVINO support before finalizing engine choices for any tier.
 - **Failure modes**: define what HA's Assist pipeline does when a connector container is down (timeout behavior, user-facing error) — not yet designed.
 
 ## Decisions so far
 
-- Local STT engine: **Vosk**, for both Tier A's `SpeechToTextEngine` fallback and Tier B's local STT — expected to change, so it sits behind a fixed API rather than being wired in directly (see Components).
-- Local TTS engine: **Silero**, likewise behind a fixed API and likely to change.
+- Local STT engine: **Vosk**, for Tier A's `SpeechToTextEngine` fallback (starting point) — expected to change, so it sits behind a fixed API rather than being wired in directly (see Components).
+- Local TTS engine: **Silero**, for Tier A's `TextToSpeechEngine` (starting point), likewise behind a fixed API and likely to change.
+- Tier B's STT/TTS engines are a separate, independent decision — not necessarily Vosk/Silero, deferred until Tier B implementation starts (Tier B is post-MVP).
 - LLM connector needs to support device control, not just chat — handled by HA's own Assist API/tool-calling (see Goals and Integration strategy), not something `LargeLanguageModelConnector` needs to implement itself.
-- Wake word: support both local (Tier A device, e.g. `micro_wake_word`) and central (`VoiceActivityDetection`) detection. Start local per device, with central as an optional later migration.
+- Wake word: support both local (Tier A device, e.g. `micro_wake_word`) and central (`VoiceActivityDetection`) detection. Start local per device; migrate a device to central detection based on an A/B test between the two, not on a fixed rule.
+- Minimal latency is a hard requirement for local STT/TTS, especially on the N150 — plan to use its Intel iGPU for inference acceleration rather than CPU-only.
+- Tier B's satellite app: keep it as simple as possible while still meeting "HA only sees finished text"; it needs its own local wake-word detection (no dependency on the central `VoiceActivityDetection`, since Tier B never streams audio anywhere). Detailed design (packaging, exact wake-word engine) is deferred — Tier B is explicitly post-MVP.
+- If/when Linux Voice Assistant grows local STT/TTS support, revisit Tier B and drop the self-maintained satellite app in favor of the upstream-maintained one.
 
 ## Open questions
 
-- Exact Vosk model/language pack for Tier A's fallback and Tier B's local STT — accuracy vs. footprint trade-off, and whether both tiers use the same model.
-- Exact Silero voice/language, and whether Tier A and Tier B share the same voice for a consistent assistant "personality."
+- Exact Vosk model/language pack for Tier A's fallback STT — accuracy vs. footprint trade-off.
+- Exact Silero voice/language for Tier A's TTS.
+- Whether Vosk/Silero (or their alternatives) have usable Intel iGPU/OpenVINO acceleration paths — may constrain engine choice, not just deployment.
 - Confirm LiteLLM correctly passes HA's Assist tool-calling through to each backend model in the routing config — behavior can differ per provider/model, worth testing explicitly once models are chosen.
-- Does the N150 need GPU/NPU acceleration to keep local STT/TTS latency acceptable, or is CPU inference (Vosk/Silero) good enough?
-- Do Tier B satellites reuse the exact same STT/TTS container images as the central services (consistent behavior, larger footprint) or a separate, lighter-weight local stack?
-- What does the Tier B satellite app look like beyond STT/TTS/VAD: does it need its own wake-word engine running locally, and how is it packaged/deployed (systemd service vs. Docker Compose on the N150)?
-- What's the concrete trigger/criteria for migrating a given Tier A device's wake word from local to central detection?
-- Worth revisiting Tier B's approach if/when Linux Voice Assistant grows local STT/TTS support, to drop the self-maintained satellite app in favor of an upstream-maintained one.
+- Tier B (post-MVP, deferred): STT/TTS engine choice, wake-word engine, and packaging/deployment shape (systemd service vs. Docker Compose on the N150).

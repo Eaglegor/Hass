@@ -1,0 +1,84 @@
+blueprint:
+  name: Assistant Speak (TTS Tool)
+  description: >
+    An Assist/LLM tool script that speaks text out loud immediately via
+    tts.speak, targeting one specific satellite's TTS engine and media
+    player. The point of exposing speech as an explicit tool (instead of
+    relying on the pipeline's own "speak the final response" step) is
+    latency: Home Assistant's tool-calling loop always does another
+    completion round-trip after any tool call, regardless of whether text
+    was already present in that turn -- so today, audio only starts once
+    that *second* round-trip's tool-call-free response comes back. If the
+    model instead calls this tool as soon as it knows what to say (ideally
+    in the same turn as any other tool calls, e.g. one for a matrix
+    clock), the audio starts right there as an immediate side effect,
+    decoupled from whatever further round-trip HA does in the background
+    to close out the turn.
+
+    Instantiate this once per satellite, matched to that satellite's own
+    TTS engine and speaker output, then expose the generated script only
+    to that satellite's own conversation agent.
+
+    IMPORTANT: after creating the script, also open its own Description
+    field (Script Editor > settings/info, next to the name -- not the
+    blueprint's input form) and paste in the same text hardcoded below as
+    this blueprint's script description -- see the matrix message
+    blueprint's notes for why this manual step is necessary.
+
+    CAVEAT: for this to avoid the assistant speaking twice, the model's
+    own final text response needs to end up empty once it has used this
+    tool (steer this via the pipeline's personality/system prompt) --
+    whether Home Assistant's TTS step tolerates an empty final string
+    cleanly (vs. erroring or falling back to a default phrase) hasn't
+    been verified and should be tested on your own setup before relying
+    on this.
+  domain: script
+  input:
+    tts_engine:
+      name: TTS Engine
+      description: >
+        The TTS provider entity (domain "tts") to speak with, e.g. the
+        same engine already used by this satellite's Assist pipeline, so
+        the voice matches.
+      selector:
+        entity:
+          domain: tts
+    media_player:
+      name: Media Player
+      description: This satellite's own speaker entity to play the speech on.
+      selector:
+        entity:
+          domain: media_player
+
+description: >
+  This is the ONLY way to speak your reply out loud to the user. As soon
+  as you have decided what to say, call this tool with your complete
+  spoken reply as natural language text -- call it in the same turn as
+  any other tool calls (like showing something on a matrix clock), not
+  after them. Once you have called this tool, your own final text
+  response must be an empty string, since your reply has already been
+  spoken through this tool.
+
+fields:
+  text:
+    name: Text
+    description: The complete spoken reply to say out loud, in natural language.
+    required: true
+    selector:
+      text:
+        multiline: true
+
+mode: queued
+max: 10
+
+sequence:
+  - variables:
+      tts_engine: !input tts_engine
+      media_player: !input media_player
+  - service: tts.speak
+    target:
+      entity_id: "{{ tts_engine }}"
+    data:
+      media_player_entity_id: "{{ media_player }}"
+      message: "{{ text }}"
+      cache: true

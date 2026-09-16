@@ -85,7 +85,7 @@ sequence:
       for_each: "{{ messages }}"
       sequence:
         - variables:
-            msg: "{{ repeat.item | string | replace('—', '-') | replace('–', '-') }}"
+            msg: "{{ repeat.item | replace('—', '-') | replace('–', '-') | string }}"
             msg_stack: "{{ first_message_stacking if repeat.first else true }}"
         - service: mqtt.publish
           data:

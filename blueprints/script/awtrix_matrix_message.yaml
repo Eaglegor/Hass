@@ -31,28 +31,26 @@ blueprint:
       selector:
         entity:
           domain: sensor
-    min_display_time:
-      name: Minimum Display Time (seconds)
+    repeat_count:
+      name: Repeat Count
       description: >
-        Display duration for the shortest messages (8 characters or
-        fewer), and the basis for the delay between queued messages
-        (max(1, min_display_time - 1) seconds).
-      default: 5
-      selector:
-        number:
-          min: 3
-          max: 30
-          step: 1
-          unit_of_measurement: s
-          mode: box
-    max_display_time:
-      name: Maximum Display Time (seconds)
-      description: Display duration for the longest messages (30 characters).
-      default: 15
+        How many times each message repeats on screen (AWTRIX3's native
+        "repeat" field), instead of an explicit display duration.
+      default: 1
       selector:
         number:
           min: 1
-          max: 15
+          max: 10
+          step: 1
+          mode: box
+    message_delay:
+      name: Delay Between Messages (seconds)
+      description: How long to wait after one queued message before sending the next.
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 30
           step: 1
           unit_of_measurement: s
           mode: box
@@ -92,29 +90,23 @@ sequence:
   - variables:
       device_topic_sensor: !input device_topic_sensor
       mqtt_topic_prefix: "{{ states(device_topic_sensor) }}"
-      min_display_time: !input min_display_time
-      max_display_time: !input max_display_time
+      repeat_count: !input repeat_count
+      message_delay: !input message_delay
       first_message_stacking: !input first_message_stacking
-      inter_message_delay: "{{ [1, min_display_time - 1] | max }}"
   - repeat:
       for_each: "{{ messages }}"
       sequence:
         - variables:
             msg: "{{ repeat.item | replace('—', '-') | replace('–', '-') }}"
-            msg_len: "{{ [8, [30, repeat.item | length] | min] | max }}"
-            msg_duration: >
-              {{ (min_display_time
-                  + (max_display_time - min_display_time) * (msg_len - 8) / 22)
-                 | round(0) | int }}
             msg_stack: "{{ first_message_stacking if repeat.first else true }}"
         - service: mqtt.publish
           data:
             topic: "{{ mqtt_topic_prefix }}/notify"
             payload: >
-              {{ {'text': msg, 'duration': msg_duration, 'stack': msg_stack} | to_json }}
+              {{ {'text': msg, 'repeat': repeat_count, 'stack': msg_stack} | to_json }}
         - if:
             - condition: template
               value_template: "{{ not repeat.last }}"
           then:
             - delay:
-                seconds: "{{ inter_message_delay }}"
+                seconds: "{{ message_delay }}"

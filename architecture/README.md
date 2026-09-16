@@ -12,6 +12,33 @@ Scope: containerized backend services for the next Home Assistant setup, focused
 - Support two satellite tiers side by side (weak ESP32-class devices vs. powerful on-device satellites), configured per device rather than as a global switch.
 - The conversation agent needs to control devices, not just chat. HA's own Assist API already provides this as OpenAI-style tool/function calls when device control is enabled on the conversation integration — the LLM connector's job is to proxy those tool calls through untouched, not reimplement device control itself.
 
+## MVP milestones
+
+Delivery order for the MVP scope (Tier A + central services + LLM connector — see Tier B section below for what's explicitly post-MVP). Each milestone should be independently usable, not just a step toward the next.
+
+### Milestone 1 — Core pipeline, on-device wake word + VAD, direct OpenRouter
+
+- Home Assistant Core running.
+- Central `SpeechToTextEngine` and `TextToSpeechEngine` containers online (Vosk/Silero to start), reached over Wyoming.
+- Tier A satellite(s) handle **both** wake word and VAD on-device — no `VoiceActivityDetection` container yet. Simplest possible working voice loop.
+- Conversation agent talks **directly to OpenRouter** — HA's own OpenRouter integration (or `openai_conversation` pointed at OpenRouter's endpoint), no `LargeLanguageModelConnector`/LiteLLM in front yet.
+- Goal: a complete, working voice assistant end to end, before adding any routing flexibility on top.
+
+### Milestone 2 — LiteLLM proxy in front of OpenRouter
+
+- Stand up `LargeLanguageModelConnector` (the LiteLLM proxy) and switch HA's conversation agent to it via the official `litellm` HA integration.
+- Configure OpenRouter as one of LiteLLM's provider entries — functionally equivalent to Milestone 1 at first, but now provider-swappable (see Decisions/Research on keeping LiteLLM as the primary gateway).
+- This is where the LiteLLM tool-calling passthrough needs to be validated end to end (see Research above) before relying on it for real device control.
+- Additional providers or local models can be added to LiteLLM's config after this point without further architecture changes.
+
+### Milestone 3 — Central VAD, optional central wake word
+
+- Bring up the `VoiceActivityDetection` container and migrate Tier A satellites to server-side VAD.
+- Central wake word becomes an option per device, not a requirement — the A/B-test-driven migration from local to central wake word (see Decisions) applies from here on.
+- Completes the Tier A architecture as documented above: VAD/STT/TTS all centralized, wake word local-or-central per device.
+
+Tier B (the N150 thick-satellite custom app) and trialing the Whisper/Piper fallback stay explicitly **post-MVP**, picked up after Milestone 3.
+
 ## Voice pipeline placement: two satellite tiers
 
 The same pipeline stages (wake word, VAD, STT, TTS) can run in two different places depending on satellite hardware. Both tiers coexist; which one a device uses is a per-satellite configuration choice.

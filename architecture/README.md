@@ -88,6 +88,24 @@ This is a build-and-maintain-ourselves component, unlike everything else in this
 - **Rhasspy 3** — was the modern rewrite of Rhasspy, but was archived in May 2026. Ruled out as a dead end.
 - **From-scratch Python** (sounddevice/pyaudio + openWakeWord + a VAD library + Vosk + Silero, wired up by hand) — the fallback if OVOS turns out too heavy or too opinionated for "keep it simple." Full control, but reinvents plumbing OVOS already provides, and loses the plugin-swappability we get for free from OVOS.
 
+### Research: hardware platform for the Tier B prototype
+
+| | Intel N150 mini PC (baseline) | Intel N305 mini PC | Raspberry Pi 5 (8GB) | NVIDIA Jetson Orin Nano Super |
+|---|---|---|---|---|
+| CPU | 4 cores/4 threads, 6W TDP | 8 cores/8 threads, ~7–15W TDP | 4-core Cortex-A76 @ 2.4GHz, ARM | 6-core Cortex-A78AE @ 1.7GHz, ARM |
+| GPU/accelerator | UHD Graphics Xe, 24 EU — **no path for Vosk/Silero** (see below) | UHD Graphics, 32 EU — same limitation | VideoCore VII — not usable for this kind of ML inference | 1024 CUDA cores + 32 Tensor cores (Ampere) |
+| Vosk/Silero acceleration | None (CPU-only; Vosk GPU=CUDA-only, Silero has no ONNX/OpenVINO path — see earlier research) | None, same reason | None, same reason | **Both accelerate natively** — Vosk's GPU path is CUDA, and Silero is plain PyTorch with native CUDA support (no conversion needed) |
+| Ecosystem fit | Mainstream x86_64 Linux/Docker — identical toolchain to the central host and every other container in this doc; Vosk/Silero/OVOS all have first-class x86_64 support | Same as N150, just more cores | ARM64 — historically *the* reference platform for Mycroft/OVOS specifically; Vosk has long-standing Raspberry Pi support; Silero on ARM is less battle-tested (no public benchmarks found) | ARM64 + NVIDIA's JetPack/L4T (a versioned Ubuntu derivative tied to specific CUDA/cuDNN releases) — capable but a different, more specialized OS/dependency story than the rest of this stack |
+| Price / power (approx.) | ~$100–150, 6W | ~$300+, ~15W | ~$80–120 all-in, 5–10W | ~$249, likely 15–25W in its higher power modes |
+| Fanless/quiet | Yes, common | Usually yes | Yes | Needs a small fan/heatsink in most builds |
+
+**Findings worth calling out:**
+- The earlier "no Intel iGPU path for Vosk/Silero" finding is Intel/OpenVINO-specific, not universal: Silero is a plain PyTorch model, so it already has **native CUDA support** with zero conversion work — an NVIDIA-based board unlocks real GPU acceleration for *both* our chosen engines (Vosk's GPU path is also CUDA-only) simultaneously, something no Intel or ARM SBC in this comparison can do.
+- Raspberry Pi 5 numbers found for a comparable stack (OpenWakeWord + Vosk + Piper) look promising on CPU alone — around 300–400MB RAM and 15–25% CPU during active speech, with Piper TTS synthesizing a short phrase in ~0.8–1.6s. No direct Silero-on-ARM benchmark was found, so this needs verifying if RPi5 is actually pursued (Silero explicitly says more than 4 threads doesn't help it, which happens to match Pi 5's 4 cores).
+- N305 is the lowest-friction escalation path if N150 turns out CPU-constrained running wake-word+STT+TTS concurrently: same x86/Intel ecosystem, same OS/software stack, just more cores — no re-platforming needed.
+
+**Recommendation**: keep the **Intel N150-class mini PC** as the default for the Tier B prototype. It's the cheapest, lowest-power option, stays on the same x86_64/Docker toolchain as everything else in this architecture (no cross-compilation or ARM-specific quirks for Vosk/Silero/OVOS), and the earlier research already concluded CPU-only should plausibly hit the sub-second latency target. Treat **Jetson Orin Nano Super** as the concrete fallback specifically if N150 CPU-only benchmarking (see Open questions) falls short — it's the one platform where both chosen engines get genuine hardware acceleration without switching engines. Treat **Raspberry Pi 5** as a cost/power-optimized alternative worth a side-by-side trial if scaling to several Tier B satellites (one per room) makes per-unit cost and power draw matter more than they do for a single prototype.
+
 ### How this is configured
 
 - Tier A devices are left at HA's defaults (Wyoming or ESPHome voice-assistant integration), which route audio through the central VAD/STT/TTS containers.
@@ -260,6 +278,7 @@ Each first-party component (`vad`, `stt`, `tts`) lives in its own `services/<nam
 - If/when Linux Voice Assistant grows local STT/TTS support, revisit Tier B and drop the self-maintained satellite app in favor of the upstream-maintained one.
 - **Tier B is a no-pause ("say the wake word and command in one breath") experience**, matching what Yandex Alice/Google Assistant/Alexa do — a real design goal, not just a nice-to-have, since Tier B owns its whole local pipeline and can implement continuous wake-word-to-STT handoff instead of gating on a chime the way HA's stock Assist flow does.
 - **Base the Tier B prototype on [OpenVoiceOS (OVOS)](https://www.openvoiceos.org/)** rather than building the mic/wake/VAD/STT/TTS orchestration from scratch — see research below.
+- **Tier B hardware stays an Intel N150-class mini PC by default.** It's the cheapest, lowest-power, and the only option that keeps the same x86_64/Docker toolchain as the rest of this architecture. Keep NVIDIA Jetson Orin Nano Super (genuine CUDA acceleration for both Vosk and Silero) and Raspberry Pi 5 (cheaper/lower-power, traditional OVOS reference hardware) documented as concrete alternatives to trial if N150 CPU-only benchmarking falls short or per-unit cost/power matters more at multi-room scale — see research below.
 
 ### Research: STT/TTS engine options for Russian, latency, and iGPU acceleration
 
@@ -277,3 +296,5 @@ Each first-party component (`vad`, `stt`, `tts`) lives in its own `services/<nam
 - Tier B (post-MVP, deferred): STT/TTS engine choice, wake-word engine, and packaging/deployment shape (systemd service vs. Docker Compose on the N150).
 - Tier B (post-MVP): whether OVOS's `skill-homeassistant` can be adapted into a pass-through mode (all utterances → HA's conversation agent) or whether a small custom OVOS pipeline plugin needs to be written instead.
 - Tier B (post-MVP): whether OVOS's stock listener already buffers enough pre-roll audio around the wake-word trigger to deliver the no-pause experience, or whether that needs explicit tuning/patching.
+- Tier B (post-MVP): benchmark Silero TTS specifically on ARM CPU (Raspberry Pi 5) if that platform is pursued — no public numbers were found, unlike the more established Vosk/Piper-on-RPi5 data points.
+- Tier B (post-MVP): confirm actual power draw and Docker/NVIDIA-container-toolkit experience on Jetson Orin Nano Super if it's prototyped, since public TDP figures for it were hard to pin down.

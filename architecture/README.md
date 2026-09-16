@@ -135,6 +135,22 @@ Tool-calling through a LiteLLM proxy is **not a safe assumption** — it's a rea
 
 **Practical implication**: validate the whole chain (HA → `litellm` integration → LiteLLM proxy → backend model) with a model known for reliable tool calling (e.g. a current GPT or Claude model) first, to confirm the pipeline itself works, before trusting any local/Ollama model's tool-calling for real device control. Don't assume "OpenAI-compatible" means tool-calling is solved end to end.
 
+### Research: alternatives to LiteLLM as the gateway
+
+The goal driving this research wasn't "replace LiteLLM" but "stop being locked into OpenRouter as the only provider" — which a gateway solves just by having more than one provider configured behind it, OpenRouter included. LiteLLM already does that, and it's the only option here with a **purpose-built HA integration** (see above), so it stays primary. Alternatives worth knowing about if LiteLLM's tool-calling bugs turn out to actually bite in testing:
+
+| | LiteLLM (current choice) | [Bifrost](https://docs.getbifrost.ai/overview) | [Portkey Gateway](https://github.com/portkey-ai/gateway) |
+|---|---|---|---|
+| License / maturity | Open source, most widely deployed of the three | Apache 2.0, newer (Go, by Maxim AI) | Open source, in production at several companies |
+| HA integration | Official `litellm` integration (bronze tier) | None — would need the generic `openai_conversation` base-URL override, same as any OpenAI-compatible endpoint | None — same generic override |
+| Tool-calling | Documented bugs (see above): streaming can drop tool calls, Ollama-routed calls can get flattened to text | Markets a native MCP gateway + "Agent Mode" for tool execution; not enough field reports yet to know its edge-case reliability | Explicit function-calling support; built-in retries/fallback could actually mask a flaky tool-call response |
+| Performance | Baseline | Claims ~54× LiteLLM's raw throughput in vendor benchmarks — likely irrelevant at home-assistant request volumes | Not a differentiator at this scale either |
+| Providers | 140+, most exhaustive coverage, incl. OpenRouter | 25+, incl. Ollama/vLLM | 100+ |
+
+Other options surfaced but not pursued further: **Kong AI Gateway** (built on Kong/NGINX — heavier footprint than this setup needs), **TensorZero** (more an LLM-ops/experimentation platform than a drop-in gateway), and smaller community proxies like `LLM-API-Key-Proxy` (lighter-weight key-rotation focus, less production track record).
+
+**Conclusion**: keep LiteLLM. Put OpenRouter behind it as one provider among several — that alone removes the OpenRouter lock-in without adding a second, less battle-tested gateway layer on top of an already-new voice pipeline. Revisit Bifrost or Portkey specifically if LiteLLM's tool-calling bugs prove to be a real blocker during end-to-end testing (see the test plan above and in Open questions).
+
 ## Docker Compose shape (sketch)
 
 Illustrative only — not final compose files yet.
@@ -174,6 +190,9 @@ services:
     networks: [hass_net]
     volumes: ["./config/litellm/config.yaml:/app/config.yaml"]
     environment:
+      # config.yaml lists multiple providers (OpenRouter among them, not the only one) —
+      # keys below are examples, actual set depends on config.yaml's model list
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
 ```
@@ -195,6 +214,7 @@ Each first-party component (`vad`, `stt`, `tts`) lives in its own `services/<nam
 - The real latency requirement is **sub-second STT/TTS with good Russian quality (correct stress/pronunciation)**, not "must use the iGPU" — CPU-only inference is acceptable if it hits that bar; iGPU acceleration is a fallback lever, and both Vosk/Silero and any alternative should stay swappable so more than one can be tried (see research below).
 - Tier B's STT/TTS engines are a separate, independent decision — not necessarily Vosk/Silero, deferred until Tier B implementation starts (Tier B is post-MVP).
 - LLM connector needs to support device control, not just chat — handled by HA's own Assist API/tool-calling (see Goals and Integration strategy), not something `LargeLanguageModelConnector` needs to implement itself.
+- **LiteLLM stays the primary `LargeLanguageModelConnector` gateway.** Not being locked into OpenRouter doesn't require dropping it: configure OpenRouter as just one provider entry in LiteLLM's routing config, alongside direct API keys (OpenAI, Anthropic, Google, etc.) and local models (Ollama). See research below for alternatives considered and when to reconsider this choice.
 - Wake word: support both local (Tier A device, e.g. `micro_wake_word`) and central (`VoiceActivityDetection`) detection. Start local per device; migrate a device to central detection based on an A/B test between the two, not on a fixed rule.
 - Tier B's satellite app: keep it as simple as possible while still meeting "HA only sees finished text"; it needs its own local wake-word detection (no dependency on the central `VoiceActivityDetection`, since Tier B never streams audio anywhere). Detailed design (packaging, exact wake-word engine) is deferred — Tier B is explicitly post-MVP.
 - If/when Linux Voice Assistant grows local STT/TTS support, revisit Tier B and drop the self-maintained satellite app in favor of the upstream-maintained one.

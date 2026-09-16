@@ -43,17 +43,6 @@ blueprint:
           max: 10
           step: 1
           mode: box
-    message_delay:
-      name: Delay Between Messages (seconds)
-      description: How long to wait after one queued message before sending the next.
-      default: 3
-      selector:
-        number:
-          min: 1
-          max: 30
-          step: 1
-          unit_of_measurement: s
-          mode: box
     first_message_stacking:
       name: First Message Stacking
       description: >
@@ -91,7 +80,6 @@ sequence:
       device_topic_sensor: !input device_topic_sensor
       mqtt_topic_prefix: "{{ states(device_topic_sensor) }}"
       repeat_count: !input repeat_count
-      message_delay: !input message_delay
       first_message_stacking: !input first_message_stacking
   - repeat:
       for_each: "{{ messages }}"
@@ -104,9 +92,3 @@ sequence:
             topic: "{{ mqtt_topic_prefix }}/notify"
             payload: >
               {{ {'text': msg, 'repeat': repeat_count, 'stack': msg_stack} | to_json }}
-        - if:
-            - condition: template
-              value_template: "{{ not repeat.last }}"
-          then:
-            - delay:
-                seconds: "{{ message_delay }}"

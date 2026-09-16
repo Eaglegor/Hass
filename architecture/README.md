@@ -10,6 +10,7 @@ Scope: containerized backend services for the next Home Assistant setup, focused
 - Prefer protocols HA already understands natively (Wyoming for voice pipeline pieces) over bespoke integrations, falling back to REST + a small custom component only where needed.
 - Keep cloud dependency optional and isolated: cloud STT is a fallback path behind a local-first proxy, not a hard requirement.
 - Support two satellite tiers side by side (weak ESP32-class devices vs. powerful on-device satellites), configured per device rather than as a global switch.
+- The conversation agent needs to control devices, not just chat. HA's own Assist API already provides this as OpenAI-style tool/function calls when device control is enabled on the conversation integration — the LLM connector's job is to proxy those tool calls through untouched, not reimplement device control itself.
 
 ## Voice pipeline placement: two satellite tiers
 
@@ -17,14 +18,14 @@ The same pipeline stages (wake word, VAD, STT, TTS) can run in two different pla
 
 ### Tier A — thin satellite (e.g. ESP32-based voice devices)
 
-- Hardware only captures/plays audio, plus optionally a cheap local wake word (e.g. ESPHome's `micro_wake_word`).
+- Hardware only captures/plays audio. Wake word detection is supported **both ways**: locally on the device (e.g. ESPHome's `micro_wake_word`) or centrally as a stage of **VoiceActivityDetection**, per-device choice. Start with local wake word — lower latency, no dependency on the central service — and migrate a given device to central wake-word detection later if there's a reason to (e.g. a custom/shared keyword, or hardware too weak even for that).
 - VAD, STT, and TTS all run centrally — the `VoiceActivityDetection`, `SpeechToTextEngine`, and `TextToSpeechEngine` containers described below, reached over Wyoming.
 - Raw audio crosses the LAN in both directions (mic → VAD/STT, TTS → speaker).
 - Fits weak/cheap hardware; trades network bandwidth and round-trip latency for near-zero on-device compute.
 
 ### Tier B — thick satellite (e.g. Intel N150 mini PC as satellite)
 
-- Runs wake word, VAD, STT, and TTS locally on the satellite itself (e.g. `faster-whisper`/whisper.cpp + Piper + a local VAD).
+- Runs wake word, VAD, STT, and TTS locally on the satellite itself. Starts with the same engine choices as the central services (Vosk for STT, Silero for TTS) for consistent behavior, but — like those containers — the engine is swappable behind the same local API.
 - Only the recognized text (request) and, on the way back, the response text cross the network. HA and the LLM connector never see raw audio for these devices — the satellite hands HA an already-processed command and speaks HA's text reply itself.
 - Not dependent on the central VAD/STT/TTS containers being reachable; needs a capable device to run local inference at acceptable latency.
 - **Implemented as a self-built satellite app** — see rationale below, since the off-the-shelf options don't currently give this shape.
@@ -58,12 +59,14 @@ Central, always-on services. Used directly by Tier A satellites; Tier B satellit
 | Component | Responsibility | Protocol to HA | Backing |
 |---|---|---|---|
 | **Home Assistant Core** | Dashboards, automations, device/area management, conversation orchestration, pipeline assembly (Assist) | — | Official `homeassistant/home-assistant` container |
-| **SpeechToTextEngine** *(Tier A)* | Exposes an STT API; internally proxies to a cloud STT provider with fallback to a local STT engine (e.g. Whisper) | Wyoming (preferred) or REST via custom `stt` platform | Custom service wrapping cloud SDK + local model |
-| **TextToSpeechEngine** *(Tier A)* | Local TTS synthesis | Wyoming (preferred) or REST via custom `tts` platform | e.g. Piper, wrapped in its own container |
-| **VoiceActivityDetection** *(Tier A)* | Detects speech segments in an audio stream before STT is invoked | Wyoming | e.g. `openWakeWord`/`webrtcvad`-based Wyoming service |
-| **LargeLanguageModelConnector** | Hosts a LiteLLM proxy in front of multiple LLM backends (cloud + local) for the conversation agent | REST (OpenAI-compatible) via HA's `openai_conversation`/`extended_openai_conversation`, or a thin custom `conversation` agent | LiteLLM proxy container |
+| **SpeechToTextEngine** *(Tier A)* | Exposes an STT API; internally proxies to a cloud STT provider with fallback to a local STT engine (starting with Vosk) | Wyoming (preferred) or REST via custom `stt` platform | Custom service wrapping cloud SDK + local model |
+| **TextToSpeechEngine** *(Tier A)* | Local TTS synthesis (starting with Silero) | Wyoming (preferred) or REST via custom `tts` platform | Custom service, swappable engine behind a fixed API |
+| **VoiceActivityDetection** *(Tier A)* | Detects speech segments in an audio stream before STT is invoked; can optionally also host central wake-word detection as an alternative to on-device wake word | Wyoming | e.g. `openWakeWord`/`webrtcvad`-based Wyoming service |
+| **LargeLanguageModelConnector** | Hosts a LiteLLM proxy in front of multiple LLM backends (cloud + local) for the conversation agent; must pass HA's tool/function calls (device control via the Assist API) through to the backend model unmodified | REST (OpenAI-compatible) via HA's `openai_conversation`/`extended_openai_conversation`, or a thin custom `conversation` agent | LiteLLM proxy container |
 
 Everything under "Backing" is a separate container; HA never talks to a model or SDK directly — always through one of these services.
+
+The local STT and TTS engines (Vosk, Silero) are starting choices, not architectural commitments: `SpeechToTextEngine` and `TextToSpeechEngine` each expose a fixed API (Wyoming/REST) with the underlying engine swappable behind it — a different container implementing the same API can replace either without touching HA's config or Tier A satellites.
 
 ## Topology
 
@@ -100,7 +103,7 @@ flowchart TB
 
 1. A Tier A satellite streams raw audio into the **Assist pipeline** configured in HA Core.
 2. HA's pipeline sends the stream to **VoiceActivityDetection** first, which trims silence and emits only the speech segment (or acts as a Wyoming VAD stage directly ahead of STT, depending on the Wyoming pipeline HA has).
-3. The speech segment goes to **SpeechToTextEngine**. Internally it tries the cloud STT provider first (better accuracy) and falls back to a local model (e.g. Whisper) if the cloud call fails or times out. HA only ever sees one STT API.
+3. The speech segment goes to **SpeechToTextEngine**. Internally it tries the cloud STT provider first (better accuracy) and falls back to a local model (starting with Vosk) if the cloud call fails or times out. HA only ever sees one STT API.
 4. The transcript goes into HA's conversation agent, which is configured to call **LargeLanguageModelConnector** (LiteLLM) instead of a single hardcoded provider. LiteLLM picks the target model/provider based on its own routing config (cost, latency, capability, or an explicit model alias configured in HA).
 5. The LLM response text goes back through HA to **TextToSpeechEngine**, which synthesizes audio locally and streams it back to the originating satellite.
 
@@ -114,9 +117,9 @@ Each arrow above is a container-to-container (or satellite-to-container) API cal
 
 ## Integration strategy per component
 
-- **VoiceActivityDetection / SpeechToTextEngine / TextToSpeechEngine** (Tier A): implement (or wrap) the [Wyoming protocol](https://github.com/rhasspy/wyoming) so HA's built-in Wyoming integration can be used as-is — no custom component to maintain. This is the preferred path for all three since HA has first-class support for Wyoming `stt`, `tts`, and `wake-word`/VAD services.
+- **VoiceActivityDetection / SpeechToTextEngine / TextToSpeechEngine** (Tier A): implement (or wrap) the [Wyoming protocol](https://github.com/rhasspy/wyoming) so HA's built-in Wyoming integration can be used as-is — no custom component to maintain. This is the preferred path for all three since HA has first-class support for Wyoming `stt`, `tts`, and `wake-word`/VAD services. Each container wraps a specific engine (Vosk for STT, Silero for TTS to start) behind that same Wyoming API, so the engine can be swapped later without touching this integration.
 - **Tier B satellites**: no existing HA integration fits (`wyoming-satellite` is deprecated; its successor, Linux Voice Assistant, doesn't do local STT/TTS — see above), so this is the one deliberately self-implemented piece: a local service on the N150 talking to HA's plain `conversation.process` REST API, not any voice-satellite protocol.
-- **LargeLanguageModelConnector**: LiteLLM proxy exposes an OpenAI-compatible REST API, so HA's official `openai_conversation` integration (or `extended_openai_conversation` from HACS if more control over exposed entities/tools is needed) can point at it directly by overriding the API base URL. No custom component needed unless tool-calling against HA entities requires more than what those integrations expose.
+- **LargeLanguageModelConnector**: LiteLLM proxy exposes an OpenAI-compatible REST API, so HA's official `openai_conversation` integration (or `extended_openai_conversation` from HACS if more control over exposed entities/tools is needed) can point at it directly by overriding the API base URL. Device control needs no extra integration work either: when "Control Home Assistant" is enabled on that integration, HA's Assist API turns exposed entities into OpenAI-style tool/function definitions automatically — LiteLLM just needs to proxy those tool calls and their results through to the underlying model unmodified. Worth verifying per backend model, since not everything LiteLLM can route to supports function calling equally well.
 - Otherwise, only fall back to a self-implemented custom component if a component can't speak Wyoming/REST in a way an existing integration supports.
 
 ## Docker Compose shape (sketch)
@@ -144,11 +147,14 @@ services:
     networks: [hass_net]
     environment:
       - CLOUD_STT_API_KEY=${CLOUD_STT_API_KEY}
-      - LOCAL_STT_MODEL=whisper-base
+      - LOCAL_STT_ENGINE=vosk
+      - LOCAL_STT_MODEL=vosk-model-small-en-us
 
   tts:
     build: ./services/tts
     networks: [hass_net]
+    environment:
+      - TTS_ENGINE=silero
 
   llm-connector:
     image: ghcr.io/berriai/litellm:latest
@@ -169,13 +175,20 @@ Each first-party component (`vad`, `stt`, `tts`) lives in its own `services/<nam
 - **Resource placement**: local STT/TTS/VAD models are the heaviest components — plan for GPU passthrough or a beefier host if local inference latency becomes the bottleneck; cloud fallback exists partly to hedge this.
 - **Failure modes**: define what HA's Assist pipeline does when a connector container is down (timeout behavior, user-facing error) — not yet designed.
 
+## Decisions so far
+
+- Local STT engine: **Vosk**, for both Tier A's `SpeechToTextEngine` fallback and Tier B's local STT — expected to change, so it sits behind a fixed API rather than being wired in directly (see Components).
+- Local TTS engine: **Silero**, likewise behind a fixed API and likely to change.
+- LLM connector needs to support device control, not just chat — handled by HA's own Assist API/tool-calling (see Goals and Integration strategy), not something `LargeLanguageModelConnector` needs to implement itself.
+- Wake word: support both local (Tier A device, e.g. `micro_wake_word`) and central (`VoiceActivityDetection`) detection. Start local per device, with central as an optional later migration.
+
 ## Open questions
 
-- Which local STT model backs the Tier A SpeechToTextEngine fallback, and Tier B's local STT (same Whisper variant, or something lighter/heavier given the N150's headroom)?
-- Which TTS engine (Piper vs. others) and voice(s) — shared choice for Tier A's central TTS and Tier B's local TTS, or allowed to differ per tier?
-- Does the LLM connector need to expose HA-specific tool-calling (control devices via conversation), or is it text-in/text-out only for now?
-- Wake word handling for Tier A — local on the ESP32 (`micro_wake_word`) or via the central VoiceActivityDetection service?
-- Does the N150 need GPU/NPU acceleration to keep local STT/TTS latency acceptable, or is CPU inference (whisper.cpp/Piper) good enough?
+- Exact Vosk model/language pack for Tier A's fallback and Tier B's local STT — accuracy vs. footprint trade-off, and whether both tiers use the same model.
+- Exact Silero voice/language, and whether Tier A and Tier B share the same voice for a consistent assistant "personality."
+- Confirm LiteLLM correctly passes HA's Assist tool-calling through to each backend model in the routing config — behavior can differ per provider/model, worth testing explicitly once models are chosen.
+- Does the N150 need GPU/NPU acceleration to keep local STT/TTS latency acceptable, or is CPU inference (Vosk/Silero) good enough?
 - Do Tier B satellites reuse the exact same STT/TTS container images as the central services (consistent behavior, larger footprint) or a separate, lighter-weight local stack?
-- What does the Tier B satellite app look like beyond STT/TTS/VAD: does it need its own wake-word engine (openWakeWord/microWakeWord running locally), and how is it packaged/deployed (systemd service vs. Docker Compose on the N150)?
+- What does the Tier B satellite app look like beyond STT/TTS/VAD: does it need its own wake-word engine running locally, and how is it packaged/deployed (systemd service vs. Docker Compose on the N150)?
+- What's the concrete trigger/criteria for migrating a given Tier A device's wake word from local to central detection?
 - Worth revisiting Tier B's approach if/when Linux Voice Assistant grows local STT/TTS support, to drop the self-maintained satellite app in favor of an upstream-maintained one.

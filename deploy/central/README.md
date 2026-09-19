@@ -1,5 +1,9 @@
 # Central stack — MVP Milestone 1
 
+**Status: verified working end-to-end** on real hardware — wake word (local, ESPHome
+ReSpeaker satellite) → STT (Vosk/Wyoming) → OpenRouter LLM (conversation agent) →
+TTS (Silero) → spoken response, actually heard out of the ReSpeaker's speaker.
+
 Brings up the central pieces from [Milestone 1](../../architecture/README.md#milestone-1--core-pipeline-on-device-wake-word--vad-direct-openrouter):
 Home Assistant Core, `SpeechToTextEngine` (Vosk over Wyoming), and `TextToSpeechEngine`
 (Silero, via [indevor/silero-tts-enhanced-addon](https://github.com/indevor/silero-tts-enhanced-addon) +
@@ -63,6 +67,19 @@ correction/limiting at all. `docker-compose.yml` already works around this with
 `<language>.yaml` there is handled gracefully). If `stt` crash-loops with a
 `TypeError: expected str, bytes or os.PathLike object, not NoneType` traceback
 pointing at `load_sentences_for_language`, this is why.
+
+**Don't try `vosk-model-ru-0.54` as a bigger/more-accurate alternative** — it looks
+like a natural upgrade from `vosk-model-small-ru-0.22`, but Alpha Cephei's current
+"big" Russian model is a k2/icefall/sherpa export (`am`, `am-onnx`, `lang`, `lm`,
+`decode*.py`), not a classic Vosk-API-shaped model (`am/conf/graph/ivector`). The
+`vosk` Python package's `Model()` constructor can't load it at all — you'll get
+`Folder '/data/vosk-model-ru-0.54' does not contain model files` regardless of how
+carefully it's downloaded/placed. Also note `wyoming-vosk`'s auto-downloader only
+mirrors `vosk-model-small-ru-0.22` for Russian (from `rhasspy/vosk-models` on
+Hugging Face, not Alpha Cephei directly) — any other Russian model name has to be
+downloaded and placed manually, and as this shows, that doesn't guarantee it'll
+actually load. Better Russian STT accuracy is a real open problem, not a config
+tweak — see the architecture doc's notes on the Whisper fallback.
 
 ## Configure Home Assistant
 
@@ -134,6 +151,39 @@ Settings → Voice assistants → add a pipeline using the Wyoming STT you just
 added, the conversation agent from the previous step, and the Silero TTS
 integration from the previous section. Wake word stays on the Tier A device
 itself at this milestone — nothing to configure centrally for it yet.
+
+### Adding an ESPHome-based Tier A satellite (e.g. a ReSpeaker)
+
+An existing ESPHome voice satellite (running the `voice_assistant` component with
+local wake word) doesn't need reflashing to move to a new HA instance — it just
+needs to be reachable on the same network and re-added:
+
+- Settings → Devices & Services → check **Discovered** (HA's host networking plus
+  the device being on the same LAN/VLAN means mDNS discovery should just find it),
+  or **Add Integration → ESPHome** and enter its IP manually if not discovered.
+- If API encryption is enabled (ESPHome's default), you'll need the `api:
+  encryption: key:` value from the device's own ESPHome YAML source — this has
+  nothing to do with the old HA instance, it's baked into the device's firmware.
+
+Once added, it shows up as a `media_player` entity (for TTS playback) and an
+`assist_satellite` entity, usable directly in the Assist pipeline above.
+
+**A `tts.speak` gotcha worth knowing**: the "Media player entity" field in the
+Developer Tools → Actions UI for `tts.speak` is a *data* parameter (where to play
+the audio), not the action's *target* (which TTS entity to invoke). If you fill in
+the media player but nothing else, you'll get `must contain at least one of
+entity_id, device_id, area_id, floor_id, label_id` — you also need to click **+ Add
+target** and select the TTS entity itself (e.g. `tts.silero_tts_enhanced`)
+separately.
+
+## Operational notes
+
+- **If the host's network configuration changes** (new Wi-Fi network, new IP, moved
+  to a different subnet/VLAN — e.g. to reach a satellite on a different segment),
+  restart the `homeassistant` container afterward: `sudo docker compose restart
+  homeassistant`. Because it runs with `network_mode: host`, HA's mDNS/zeroconf
+  discovery binds directly to host interfaces and can be left in a stale state by
+  a live network change underneath it, causing general instability until restarted.
 
 ## What's deliberately not here yet
 

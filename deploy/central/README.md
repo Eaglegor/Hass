@@ -28,15 +28,11 @@ docker compose logs -f
 First start will take a while: `wyoming-vosk` downloads the configured Vosk model
 into `./data/vosk`, and `silero-tts-service` downloads its model on first request.
 
-**Before trusting the `stt` service's command-line flags**, verify them against the
-image's own help output — the exact CLI surface for `rhasspy/wyoming-vosk` wasn't
-confirmed from published docs while scaffolding this:
-
-```bash
-docker run --rm rhasspy/wyoming-vosk --help
-```
-
-Adjust `command:` in `docker-compose.yml` if the flags differ from what's there.
+The `stt` service's flags were confirmed against `docker run --rm rhasspy/wyoming-vosk --help`.
+Note there's no plain `--model` flag: model selection goes through
+`--model-for-language <language> <model>` (two values), and `--preload-language`
+loads the model at startup instead of lazily on the first request — both are
+already wired up in `docker-compose.yml` via `VOSK_LANGUAGE`/`VOSK_MODEL`.
 
 ## Configure Home Assistant
 

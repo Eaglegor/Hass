@@ -16,14 +16,17 @@ services:
     image: rhasspy/wyoming-vosk:latest
     container_name: hass-stt
     restart: unless-stopped
-    # NOTE: verify these flags against `docker run --rm rhasspy/wyoming-vosk --help`
-    # before first run — the exact CLI surface wasn't confirmed from docs alone.
+    # Flags confirmed against `docker run --rm rhasspy/wyoming-vosk --help`.
+    # There is no plain --model flag — --model-for-language takes two values
+    # (language, then model name), and --preload-language loads it at startup
+    # instead of lazily on the first request.
     command: >
       --uri tcp://0.0.0.0:10300
       --data-dir /data
       --download-dir /data
-      --model ${VOSK_MODEL:-vosk-model-small-ru-0.22}
       --language ${VOSK_LANGUAGE:-ru}
+      --preload-language ${VOSK_LANGUAGE:-ru}
+      --model-for-language ${VOSK_LANGUAGE:-ru} ${VOSK_MODEL:-vosk-model-small-ru-0.22}
     ports:
       - "10300:10300"
     volumes:

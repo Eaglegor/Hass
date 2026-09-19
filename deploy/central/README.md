@@ -2,8 +2,21 @@
 
 Brings up the central pieces from [Milestone 1](../../architecture/README.md#milestone-1--core-pipeline-on-device-wake-word--vad-direct-openrouter):
 Home Assistant Core, `SpeechToTextEngine` (Vosk over Wyoming), and `TextToSpeechEngine`
-(Silero over REST). No `VoiceActivityDetection` container and no LiteLLM proxy yet —
-those are Milestones 2 and 3.
+(Silero, via [indevor/silero-tts-enhanced-addon](https://github.com/indevor/silero-tts-enhanced-addon) +
+its [HACS companion integration](https://github.com/indevor/silero-tts-enhanced-hacs)).
+No `VoiceActivityDetection` container and no LiteLLM proxy yet — those are Milestones 2 and 3.
+
+Note on the TTS choice: `indevor/silero-tts-enhanced-addon` is packaged as a Home
+Assistant OS **Add-on** (Supervisor-only), which doesn't run on our Container-based
+setup as-is. It turned out to be a plain FastAPI/Uvicorn app with no Supervisor
+dependency underneath (`"options": {}` in its `config.json`, an ordinary
+`Dockerfile`), so `docker-compose.yml` here builds it directly from the add-on's
+own repo instead of using it as a Supervisor add-on. Two other Silero options were
+tried and ruled out first: `navatusein/silero-tts-service` (REST, MaryTTS-shaped)
+doesn't work because the `marytts` TTS platform is a **dead legacy stub** in
+current Home Assistant — it shows up as a recognized integration but creates zero
+entities; and `ganiushin/parakeet-stt-silero-tts-addons-haos`'s Wyoming-Silero
+server is also Supervisor-add-on-only.
 
 This is meant to run on the central host (the N150 mini PC).
 
@@ -20,13 +33,21 @@ This is meant to run on the central host (the N150 mini PC).
 ```bash
 cd deploy/central
 cp .env.example .env
-# edit .env if you want a different Vosk model/language or Silero settings
-docker compose up -d
+# edit .env if you want a different Vosk model/language
+docker compose up -d --build
 docker compose logs -f
 ```
 
+`--build` matters here: `tts` isn't a pre-built image, it's built from
+`indevor/silero-tts-enhanced-addon`'s repo directly (see note above) — this will
+take noticeably longer than a plain `docker compose up -d` the first time, since
+Docker has to clone the repo and install `silero-tts`/`torch` and friends inside
+the image build itself, on top of the model download that happens later at
+runtime.
+
 First start will take a while: `wyoming-vosk` downloads the configured Vosk model
-into `./data/vosk`, and `silero-tts-service` downloads its model on first request.
+into `./data/vosk`, and the Silero TTS engine downloads its model into
+`./data/silero` on its first `/tts` request (not at container startup).
 
 The `stt` service's flags were confirmed against `docker run --rm rhasspy/wyoming-vosk --help`.
 Note there's no plain `--model` flag: model selection goes through
@@ -53,28 +74,43 @@ Settings → Devices & Services → Add Integration → **Wyoming Protocol** →
 `localhost` (host networking means HA sees `stt`/`tts` on the loopback), port
 `10300`. HA should pick it up as a speech-to-text provider automatically.
 
-### TTS — MaryTTS platform (Silero's REST API is MaryTTS-compatible)
+### TTS — HACS custom integration (not YAML, not Wyoming, not MaryTTS)
 
-The Silero TTS service isn't a Wyoming server — it exposes a REST API compatible
-with HA's built-in MaryTTS platform. Add to `config/homeassistant/configuration.yaml`:
+The `tts` container exposes a plain REST API (`POST /tts` with a JSON body,
+returns a WAV file) on port `8014` — there's no Wyoming or MaryTTS compatibility
+here, it needs its own HA-side integration:
 
-```yaml
-tts:
-  - platform: marytts
-    host: localhost
-    port: 9898
-    codec: "WAVE_FILE"
-    language: "ru"
-    voice: "REPLACE_ME" # see below
-```
+1. **Install HACS** first, if you haven't (Container installs don't come with
+   it — HAOS-only add-ons like the ones we ruled out above assume it's there,
+   plain custom integrations need it explicitly):
+   ```bash
+   sudo docker compose exec homeassistant bash
+   cd /config
+   wget -O - https://get.hacs.xyz | bash -
+   exit
+   sudo docker compose restart homeassistant
+   ```
+   Hard-refresh your browser (Ctrl+Shift+R), then Settings → Devices & Services
+   → Add Integration → **HACS** → follow the GitHub device-activation flow.
+2. In HACS → **Custom repositories**, add
+   `https://github.com/indevor/silero-tts-enhanced-hacs` as an **Integration**.
+3. Install it from HACS, restart Home Assistant.
+4. Settings → Devices & Services → Add Integration → search for the Silero TTS
+   Enhanced integration. When it asks for the server address, point it at
+   `http://localhost:8014` (host networking again) and pick a voice/language
+   from its UI.
 
-Find a real voice name before setting `voice:`:
+Sanity-check the backend directly before wiring up the HA side, if you want:
 
 ```bash
-curl http://localhost:9898/voices
+curl -X POST http://localhost:8014/tts \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Привет, это тест", "voice": "xenia", "language": "ru"}' \
+  --output /tmp/test.wav
 ```
 
-Restart Home Assistant after editing `configuration.yaml`.
+A non-empty, playable `test.wav` means the backend itself is working, independent
+of whatever HA-side wiring comes next.
 
 ### Conversation agent — direct to OpenRouter
 
@@ -95,9 +131,9 @@ conversation integration straight at OpenRouter:
 ### Assist pipeline
 
 Settings → Voice assistants → add a pipeline using the Wyoming STT you just
-added, the conversation agent from the previous step, and the MaryTTS-backed
-TTS. Wake word stays on the Tier A device itself at this milestone — nothing to
-configure centrally for it yet.
+added, the conversation agent from the previous step, and the Silero TTS
+integration from the previous section. Wake word stays on the Tier A device
+itself at this milestone — nothing to configure centrally for it yet.
 
 ## What's deliberately not here yet
 

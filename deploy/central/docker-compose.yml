@@ -39,18 +39,19 @@ services:
       - ./data/vosk:/data
 
   tts:
-    image: navatusein/silero-tts-service:latest
+    # Built directly from the add-on's own repo (git build context, no local
+    # vendoring of their code) — the underlying container is a plain
+    # FastAPI/Uvicorn app with no Supervisor dependency, even though the repo
+    # is packaged as a Home Assistant OS add-on. Paired with the
+    # indevor/silero-tts-enhanced-hacs custom integration on the HA side
+    # (installed via HACS, not covered by this compose file) — see README.
+    build:
+      context: https://github.com/indevor/silero-tts-enhanced-addon.git#main:silero_tts_enhanced_addon
     container_name: hass-tts
     restart: unless-stopped
     ports:
-      - "9898:9898"
-    environment:
-      - NUMBER_OF_THREADS=${SILERO_THREADS:-4}
-      - LANGUAGE=${SILERO_LANGUAGE:-ru}
-      - SAMPLE_RATE=${SILERO_SAMPLE_RATE:-48000}
-      # Fixes speech getting truncated when HA calls this as a TTS platform.
-      - HA_FIX=True
-    deploy:
-      resources:
-        limits:
-          memory: 1G
+      - "8014:8014"
+    volumes:
+      # Model cache — the app looks for /data itself and persists here if
+      # present, falling back to an ephemeral in-container path otherwise.
+      - ./data/silero:/data

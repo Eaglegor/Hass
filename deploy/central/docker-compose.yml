@@ -20,10 +20,16 @@ services:
     # There is no plain --model flag — --model-for-language takes two values
     # (language, then model name), and --preload-language loads it at startup
     # instead of lazily on the first request.
+    # --sentences-dir is required whenever --preload-language is used: the
+    # upstream code calls load_sentences_for_language() unconditionally during
+    # preload and crashes on a None path if it's omitted, even though we don't
+    # use sentence correction/limiting. The directory doesn't need to contain
+    # anything — a missing "<language>.yaml" inside it is handled gracefully.
     command: >
       --uri tcp://0.0.0.0:10300
       --data-dir /data
       --download-dir /data
+      --sentences-dir /data/sentences
       --language ${VOSK_LANGUAGE:-ru}
       --preload-language ${VOSK_LANGUAGE:-ru}
       --model-for-language ${VOSK_LANGUAGE:-ru} ${VOSK_MODEL:-vosk-model-small-ru-0.22}

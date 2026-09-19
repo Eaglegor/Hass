@@ -34,6 +34,15 @@ Note there's no plain `--model` flag: model selection goes through
 loads the model at startup instead of lazily on the first request — both are
 already wired up in `docker-compose.yml` via `VOSK_LANGUAGE`/`VOSK_MODEL`.
 
+There's also an upstream `wyoming-vosk` bug worth knowing about: `--preload-language`
+unconditionally calls into sentence-loading code that crashes on a `None` path if
+`--sentences-dir` isn't set, even though we're not using sentence
+correction/limiting at all. `docker-compose.yml` already works around this with
+`--sentences-dir /data/sentences` (an empty directory is fine — a missing
+`<language>.yaml` there is handled gracefully). If `stt` crash-loops with a
+`TypeError: expected str, bytes or os.PathLike object, not NoneType` traceback
+pointing at `load_sentences_for_language`, this is why.
+
 ## Configure Home Assistant
 
 Open `http://<n150-ip>:8123`, finish onboarding, then:

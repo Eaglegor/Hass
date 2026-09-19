@@ -1,0 +1,47 @@
+services:
+  homeassistant:
+    image: homeassistant/home-assistant:stable
+    container_name: hass-core
+    restart: unless-stopped
+    # Host networking is Home Assistant's own recommendation for the Container
+    # install method — it's what lets mDNS-based discovery (Wyoming, ESPHome,
+    # HA Voice PE devices) find this box without extra port juggling.
+    network_mode: host
+    volumes:
+      - ./config/homeassistant:/config
+    environment:
+      - TZ=${TZ:-Etc/UTC}
+
+  stt:
+    image: rhasspy/wyoming-vosk:latest
+    container_name: hass-stt
+    restart: unless-stopped
+    # NOTE: verify these flags against `docker run --rm rhasspy/wyoming-vosk --help`
+    # before first run — the exact CLI surface wasn't confirmed from docs alone.
+    command: >
+      --uri tcp://0.0.0.0:10300
+      --data-dir /data
+      --download-dir /data
+      --model ${VOSK_MODEL:-vosk-model-small-ru-0.22}
+      --language ${VOSK_LANGUAGE:-ru}
+    ports:
+      - "10300:10300"
+    volumes:
+      - ./data/vosk:/data
+
+  tts:
+    image: navatusein/silero-tts-service:latest
+    container_name: hass-tts
+    restart: unless-stopped
+    ports:
+      - "9898:9898"
+    environment:
+      - NUMBER_OF_THREADS=${SILERO_THREADS:-4}
+      - LANGUAGE=${SILERO_LANGUAGE:-ru}
+      - SAMPLE_RATE=${SILERO_SAMPLE_RATE:-48000}
+      # Fixes speech getting truncated when HA calls this as a TTS platform.
+      - HA_FIX=True
+    deploy:
+      resources:
+        limits:
+          memory: 1G

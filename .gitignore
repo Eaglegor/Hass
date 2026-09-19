@@ -1,0 +1,5 @@
+# Runtime state for the central deploy stack — generated on the host, not checked in.
+deploy/central/.env
+deploy/central/data/
+deploy/central/config/homeassistant/*
+!deploy/central/config/homeassistant/.gitkeep

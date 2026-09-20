@@ -24,6 +24,18 @@ server is also Supervisor-add-on-only.
 
 This is meant to run on the central host (the N150 mini PC).
 
+**Quick start on a fresh machine**: clone this repo yourself, then run `init.sh`
+to install Docker and bring up the stack in one go:
+
+```bash
+git clone https://github.com/Eaglegor/Hass.git
+bash Hass/deploy/central/init.sh
+```
+
+It only handles what can actually be scripted — the HA onboarding, HACS,
+and integration setup below are still manual, UI-driven steps (the script
+prints a checklist of them at the end).
+
 ## Prerequisites
 
 - Docker Engine + Compose plugin installed (`docker compose version` should work).
@@ -99,7 +111,9 @@ here, it needs its own HA-side integration:
 
 1. **Install HACS** first, if you haven't (Container installs don't come with
    it — HAOS-only add-ons like the ones we ruled out above assume it's there,
-   plain custom integrations need it explicitly):
+   plain custom integrations need it explicitly). `init.sh` already does this
+   part for you; skip straight to the hard-refresh/Add Integration step below
+   if you used it. Otherwise:
    ```bash
    sudo docker compose exec homeassistant bash
    cd /config

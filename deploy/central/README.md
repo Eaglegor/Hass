@@ -24,11 +24,12 @@ server is also Supervisor-add-on-only.
 
 This is meant to run on the central host (the N150 mini PC).
 
-**Quick start on a fresh machine**: `init.sh` in this directory installs Docker,
-clones this repo, and brings up the stack in one go:
+**Quick start on a fresh machine**: clone this repo yourself, then run `init.sh`
+to install Docker and bring up the stack in one go:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Eaglegor/Hass/main/deploy/central/init.sh | bash
+git clone https://github.com/Eaglegor/Hass.git
+bash Hass/deploy/central/init.sh
 ```
 
 It only handles what can actually be scripted — the HA onboarding, HACS,

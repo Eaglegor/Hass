@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 #
 # Bootstraps a fresh Debian machine (developed against Debian 13 "trixie" on an
-# Intel N150 mini PC) with the Milestone 1 central stack: installs Docker, clones
-# this repo, and brings up Home Assistant Core + SpeechToTextEngine (Vosk) +
-# TextToSpeechEngine (Silero).
+# Intel N150 mini PC) with the Milestone 1 central stack: installs Docker and
+# brings up Home Assistant Core + SpeechToTextEngine (Vosk) + TextToSpeechEngine
+# (Silero).
 #
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/Eaglegor/Hass/main/deploy/central/init.sh | bash
-# or, if you've already cloned the repo:
-#   bash deploy/central/init.sh
+# Usage — clone this repo yourself first, then run the script from within it:
+#   git clone https://github.com/Eaglegor/Hass.git
+#   bash Hass/deploy/central/init.sh
 #
 # What this script does NOT do (see deploy/central/README.md for these):
 #   - Home Assistant onboarding (web UI, first-run wizard)
@@ -22,8 +21,7 @@
 
 set -euo pipefail
 
-REPO_URL="https://github.com/Eaglegor/Hass.git"
-REPO_DIR="${HOME}/Hass"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() { printf '\n\033[1;32m==>\033[0m %s\n' "$1"; }
 warn() { printf '\n\033[1;33m!!\033[0m %s\n' "$1"; }
@@ -50,7 +48,7 @@ else
   done
 
   sudo apt-get update
-  sudo apt-get install -y ca-certificates curl git
+  sudo apt-get install -y ca-certificates curl
   sudo install -m 0755 -d /etc/apt/keyrings
   sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
   sudo chmod a+r /etc/apt/keyrings/docker.asc
@@ -74,21 +72,9 @@ else
   warn "Added $USER to the 'docker' group — log out and back in (or run 'newgrp docker') for that to take effect without needing sudo each time. This script will keep using sudo for the rest of this run."
 fi
 
-# --- 3. Clone (or update) the repo ---
-if [[ -d "${REPO_DIR}/.git" ]]; then
-  log "Repo already cloned at ${REPO_DIR}, pulling latest..."
-  git -C "${REPO_DIR}" pull
-elif [[ -e "${REPO_DIR}" ]]; then
-  echo "ERROR: ${REPO_DIR} exists and isn't a git repo. Move it aside or set REPO_DIR to a different path before re-running." >&2
-  exit 1
-else
-  log "Cloning ${REPO_URL} into ${REPO_DIR}..."
-  git clone "${REPO_URL}" "${REPO_DIR}"
-fi
+cd "${SCRIPT_DIR}"
 
-cd "${REPO_DIR}/deploy/central"
-
-# --- 4. Set up .env ---
+# --- 3. Set up .env ---
 if [[ -f .env ]]; then
   log ".env already exists, leaving it as-is."
 else
@@ -96,7 +82,7 @@ else
   cp .env.example .env
 fi
 
-# --- 5. Bring up the stack ---
+# --- 4. Bring up the stack ---
 log "Building and starting the stack (this takes a while the first time — the tts image builds from source, and stt downloads its Vosk model on first start)..."
 sudo docker compose up -d --build
 

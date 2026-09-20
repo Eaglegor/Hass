@@ -111,7 +111,9 @@ here, it needs its own HA-side integration:
 
 1. **Install HACS** first, if you haven't (Container installs don't come with
    it — HAOS-only add-ons like the ones we ruled out above assume it's there,
-   plain custom integrations need it explicitly):
+   plain custom integrations need it explicitly). `init.sh` already does this
+   part for you; skip straight to the hard-refresh/Add Integration step below
+   if you used it. Otherwise:
    ```bash
    sudo docker compose exec homeassistant bash
    cd /config

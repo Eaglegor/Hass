@@ -9,15 +9,17 @@
 #   git clone https://github.com/Eaglegor/Hass.git
 #   bash Hass/deploy/central/init.sh
 #
-# What this script does NOT do (see deploy/central/README.md for these):
+# It also pre-installs HACS's files into the Home Assistant config (the same
+# `wget | bash` installer, run inside the container). What it does NOT do (see
+# deploy/central/README.md for these):
 #   - Home Assistant onboarding (web UI, first-run wizard)
-#   - Installing HACS and the Silero TTS Enhanced integration
+#   - HACS's one-time GitHub device-activation flow, and installing the
+#     Silero TTS Enhanced integration through it
 #   - Adding the Wyoming STT integration, the TTS integration, and the
 #     OpenRouter conversation agent in the HA UI
 #   - Setting up the Assist pipeline
 #   - Adding Tier A satellites (ESPHome devices, ReSpeakers, etc.)
-# These are one-time, UI-driven steps with no reliable API to script against —
-# this script only gets the containers running and reachable.
+# These are one-time, UI-driven steps with no reliable API to script against.
 
 set -euo pipefail
 
@@ -86,6 +88,29 @@ fi
 log "Building and starting the stack (this takes a while the first time — the tts image builds from source, and stt downloads its Vosk model on first start)..."
 sudo docker compose up -d --build
 
+# --- 5. Pre-install HACS into the Home Assistant config ---
+# This only lays down HACS's files via the same installer script we'd otherwise
+# run by hand inside the container — it still needs a one-time GitHub
+# device-activation flow in the HA UI afterward (Settings -> Devices & Services
+# -> Add Integration -> HACS), which can't be scripted.
+if [[ -d config/homeassistant/custom_components/hacs ]]; then
+  log "HACS already installed in config/homeassistant, skipping."
+else
+  log "Waiting for the homeassistant container to be running..."
+  for _ in $(seq 1 30); do
+    if [[ "$(sudo docker compose ps -q homeassistant | xargs -r sudo docker inspect -f '{{.State.Running}}' 2>/dev/null)" == "true" ]]; then
+      break
+    fi
+    sleep 1
+  done
+
+  log "Installing HACS into the Home Assistant config..."
+  sudo docker compose exec -T homeassistant bash -c "cd /config && wget -O - https://get.hacs.xyz | bash -"
+
+  log "Restarting Home Assistant to pick up HACS..."
+  sudo docker compose restart homeassistant
+fi
+
 log "Waiting for containers to report healthy status..."
 sleep 5
 sudo docker compose ps
@@ -99,9 +124,11 @@ deploy/central/README.md for full detail on each):
   1. Open http://<this-machine-ip>:8123 and complete Home Assistant onboarding.
   2. Settings -> Devices & Services -> Add Integration -> Wyoming Protocol
      -> host "localhost", port 10300 (SpeechToTextEngine).
-  3. Install HACS (see README's "TTS -- HACS custom integration" section),
-     then add the indevor/silero-tts-enhanced-hacs custom repository and
-     install/configure it with server URL "http://localhost:8014".
+  3. HACS's files are already installed. Finish its one-time setup: Settings
+     -> Devices & Services -> Add Integration -> HACS -> follow the GitHub
+     device-activation flow. Then in HACS, add the
+     indevor/silero-tts-enhanced-hacs custom repository (as an Integration),
+     install it, and configure it with server URL "http://localhost:8014".
      Do NOT use navatusein/silero-tts-service or the marytts platform --
      both are dead ends (see README for why).
   4. Add an OpenRouter (or OpenAI Conversation pointed at OpenRouter's

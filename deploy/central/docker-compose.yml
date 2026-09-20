@@ -83,6 +83,25 @@ services:
     volumes:
       - ./data/matter-server:/data
       - /run/dbus:/run/dbus:ro
+    # Forces on.dcl.csa-iot.org (the CSA's Distributed Compliance Ledger) to
+    # fail fast instead of hanging. matter-server hits this same host for both
+    # its PAA-certificate fetch and its vendor-info fetch on every startup;
+    # both are unauthenticated network calls with no CLI flag to disable.
+    # Confirmed on real hardware that this host can stall indefinitely: the
+    # PAA-cert fetch at least catches its own TimeoutError and falls back to a
+    # Git mirror after ~5 minutes, but vendor_info.py's _fetch_vendors() only
+    # catches aiohttp.ClientError, not TimeoutError -- a stalled connection
+    # there is simply never handled, hanging the entire server startup
+    # (matches https://github.com/home-assistant/core/issues/167227, an
+    # unresolved upstream report of the identical symptom). Routing the
+    # hostname to loopback makes the connection attempt refuse immediately,
+    # which *is* a ClientError, so both fetches take their existing fallback
+    # paths (Git-mirrored PAA certs; bundled/cached vendor names) right away
+    # instead of stalling. Costs only DCL's live data freshness -- PAA certs
+    # still come from the Git mirror, vendor names may show as bare vendor IDs
+    # instead of friendly names.
+    extra_hosts:
+      - "on.dcl.csa-iot.org:127.0.0.1"
 
   tts:
     # Built directly from the add-on's own repo (git build context, no local

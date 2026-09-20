@@ -206,6 +206,20 @@ separately.
   where devices commission and work fine despite it. Confirm by actually adding
   the Matter integration (`ws://localhost:5580/ws`) and commissioning a device —
   if that works, ignore the log line.
+- **`matter-server` can hang forever at "Fetching the latest vendor info from
+  DCL"** — confirmed on real hardware, not just a slow-DCL edge case. Both the
+  PAA-certificate fetch and the vendor-info fetch hit `on.dcl.csa-iot.org` on
+  every startup, but only the PAA-cert code catches its own timeout and falls
+  back to a Git mirror; `vendor_info.py`'s fetch only catches
+  `aiohttp.ClientError`, not `TimeoutError`, so a stalled connection there is
+  never handled and blocks the server from ever finishing startup (matches
+  [home-assistant/core#167227](https://github.com/home-assistant/core/issues/167227),
+  an unresolved upstream report of the identical hang). Worked around in
+  `docker-compose.yml` via `extra_hosts` pointing that hostname at loopback,
+  so the connection refuses instantly and both fetches take their existing
+  fallback paths immediately instead of stalling. Costs only DCL's live data
+  freshness (vendor names may show as bare vendor IDs instead of friendly
+  names; PAA certs still come from the Git mirror either way).
 - **If the host's network configuration changes** (new Wi-Fi network, new IP, moved
   to a different subnet/VLAN — e.g. to reach a satellite on a different segment),
   restart the `homeassistant` container afterward: `sudo docker compose restart

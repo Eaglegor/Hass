@@ -13,9 +13,22 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    # USB Zigbee/Z-Wave dongle passthrough. network_mode: host does NOT grant
+    # device access on its own -- that's a separate namespace, and without an
+    # explicit mapping ZHA/zwave_js can't open the serial port at all (shows up
+    # as a vague "was not able to automatically detect serial port settings"
+    # error, not an obvious permissions/missing-device one).
+    # /dev/ttyUSB0 is passed through directly since Docker's `devices:` needs a
+    # real device node, not a symlink; the /dev/serial/by-id bind mount below
+    # makes the *stable* identifier available inside the container too, so ZHA
+    # can be configured against that instead of the (occasionally
+    # renumberable) /dev/ttyUSBn path directly.
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0
     volumes:
       - ./config/homeassistant:/config
       - /run/dbus:/run/dbus:ro
+      - /dev/serial/by-id:/dev/serial/by-id
     environment:
       - TZ=${TZ:-Etc/UTC}
 

@@ -96,19 +96,30 @@ sudo docker compose up -d --build
 if [[ -d config/homeassistant/custom_components/hacs ]]; then
   log "HACS already installed in config/homeassistant, skipping."
 else
-  log "Waiting for the homeassistant container to be running..."
-  for _ in $(seq 1 30); do
-    if [[ "$(sudo docker compose ps -q homeassistant | xargs -r sudo docker inspect -f '{{.State.Running}}' 2>/dev/null)" == "true" ]]; then
+  # The container being "running" just means the process started — HACS's own
+  # installer looks for a .HA_VERSION marker file, which Home Assistant itself
+  # only writes once it finishes its first-boot initialization. That can take
+  # a good while on a fresh /config, so wait for the marker directly rather
+  # than for the container state.
+  log "Waiting for Home Assistant to finish first-boot initialization (up to 3 minutes)..."
+  ha_ready=false
+  for _ in $(seq 1 180); do
+    if [[ -f config/homeassistant/.HA_VERSION ]]; then
+      ha_ready=true
       break
     fi
     sleep 1
   done
 
-  log "Installing HACS into the Home Assistant config..."
-  sudo docker compose exec -T homeassistant bash -c "cd /config && wget -O - https://get.hacs.xyz | bash -"
+  if [[ "${ha_ready}" != "true" ]]; then
+    warn "Home Assistant didn't finish first-boot initialization within 3 minutes (no .HA_VERSION yet) — skipping the HACS pre-install. Re-run this script once it has, or follow the manual HACS install steps in README.md."
+  else
+    log "Installing HACS into the Home Assistant config..."
+    sudo docker compose exec -T homeassistant bash -c "cd /config && wget -O - https://get.hacs.xyz | bash -"
 
-  log "Restarting Home Assistant to pick up HACS..."
-  sudo docker compose restart homeassistant
+    log "Restarting Home Assistant to pick up HACS..."
+    sudo docker compose restart homeassistant
+  fi
 fi
 
 log "Waiting for containers to report healthy status..."

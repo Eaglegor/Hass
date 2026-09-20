@@ -58,6 +58,23 @@ services:
     volumes:
       - ./data/vosk:/data
 
+  matter-server:
+    # General smart-home infra, unrelated to the voice pipeline: HA's built-in
+    # Matter integration is just a thin WebSocket client -- it doesn't bundle
+    # an actual Matter server, so this is a separate required service.
+    image: ghcr.io/home-assistant-libs/python-matter-server:stable
+    container_name: hass-matter-server
+    restart: unless-stopped
+    security_opt:
+      - apparmor=unconfined
+    # Matter relies heavily on mDNS/multicast for device discovery, which
+    # doesn't work reliably through Docker's default bridge networking --
+    # same reasoning as homeassistant's network_mode: host above.
+    network_mode: host
+    volumes:
+      - ./data/matter-server:/data
+      - /run/dbus:/run/dbus:ro
+
   tts:
     # Built directly from the add-on's own repo (git build context, no local
     # vendoring of their code) — the underlying container is a plain

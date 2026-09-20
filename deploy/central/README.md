@@ -24,6 +24,17 @@ server is also Supervisor-add-on-only.
 
 This is meant to run on the central host (the N150 mini PC).
 
+**Quick start on a fresh machine**: `init.sh` in this directory installs Docker,
+clones this repo, and brings up the stack in one go:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Eaglegor/Hass/main/deploy/central/init.sh | bash
+```
+
+It only handles what can actually be scripted — the HA onboarding, HACS,
+and integration setup below are still manual, UI-driven steps (the script
+prints a checklist of them at the end).
+
 ## Prerequisites
 
 - Docker Engine + Compose plugin installed (`docker compose version` should work).

@@ -192,6 +192,20 @@ separately.
 
 ## Operational notes
 
+- **`matter-server` logs "Failed to advertise records: ... Network is unreachable"
+  for `br-xxxxxxxx`** — this is expected noise, not a sign `MATTER_PRIMARY_INTERFACE`
+  didn't take effect. `--primary-interface` only picks which interface's address
+  matter-server advertises as its own; the underlying `zeroconf` library still
+  enumerates *every* interface on the host (since it's `network_mode: host`),
+  including the Docker bridge network `docker compose` creates for `stt`/`tts`,
+  and logs a harmless error when it can't bind/multicast on that unrelated
+  bridge. Widely reported upstream with no available fix (there's no flag to
+  restrict which interfaces zeroconf binds to) — see
+  [home-assistant/core#145481](https://github.com/home-assistant/core/issues/145481)
+  and [home-assistant/core#149284](https://github.com/home-assistant/core/issues/149284),
+  where devices commission and work fine despite it. Confirm by actually adding
+  the Matter integration (`ws://localhost:5580/ws`) and commissioning a device —
+  if that works, ignore the log line.
 - **If the host's network configuration changes** (new Wi-Fi network, new IP, moved
   to a different subnet/VLAN — e.g. to reach a satellite on a different segment),
   restart the `homeassistant` container afterward: `sudo docker compose restart

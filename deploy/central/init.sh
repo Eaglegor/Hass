@@ -74,9 +74,24 @@ else
   warn "Added $USER to the 'docker' group — log out and back in (or run 'newgrp docker') for that to take effect without needing sudo each time. This script will keep using sudo for the rest of this run."
 fi
 
+# --- 3. Install and enable BlueZ, for the homeassistant container's Bluetooth ---
+# docker-compose.yml mounts the host's D-Bus socket and adds the capabilities
+# HA's Bluetooth integration needs to talk to BlueZ -- but BlueZ itself has to
+# actually be installed and running on the host, or HA fails setup with
+# "[org.freedesktop.DBus.Error.ServiceUnknown] The name org.bluez was not
+# provided by any .service files".
+if systemctl is-active --quiet bluetooth 2>/dev/null; then
+  log "BlueZ (bluetooth.service) already installed and running, skipping."
+else
+  log "Installing and enabling BlueZ..."
+  sudo apt-get update
+  sudo apt-get install -y bluez
+  sudo systemctl enable --now bluetooth
+fi
+
 cd "${SCRIPT_DIR}"
 
-# --- 3. Set up .env ---
+# --- 4. Set up .env ---
 if [[ -f .env ]]; then
   log ".env already exists, leaving it as-is."
 else
@@ -84,11 +99,11 @@ else
   cp .env.example .env
 fi
 
-# --- 4. Bring up the stack ---
+# --- 5. Bring up the stack ---
 log "Building and starting the stack (this takes a while the first time — the tts image builds from source, and stt downloads its Vosk model on first start)..."
 sudo docker compose up -d --build
 
-# --- 5. Pre-install HACS into the Home Assistant config ---
+# --- 6. Pre-install HACS into the Home Assistant config ---
 # This only lays down HACS's files via the same installer script we'd otherwise
 # run by hand inside the container — it still needs a one-time GitHub
 # device-activation flow in the HA UI afterward (Settings -> Devices & Services

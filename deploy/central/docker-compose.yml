@@ -7,8 +7,15 @@ services:
     # install method — it's what lets mDNS-based discovery (Wyoming, ESPHome,
     # HA Voice PE devices) find this box without extra port juggling.
     network_mode: host
+    # Lets HA's Bluetooth integration talk to the host's BlueZ over D-Bus, plus
+    # the raw HCI socket access some backends need. Without these it fails
+    # with "DBus service not found" and never actually scans.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     volumes:
       - ./config/homeassistant:/config
+      - /run/dbus:/run/dbus:ro
     environment:
       - TZ=${TZ:-Etc/UTC}
 

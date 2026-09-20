@@ -71,6 +71,15 @@ services:
     # doesn't work reliably through Docker's default bridge networking --
     # same reasoning as homeassistant's network_mode: host above.
     network_mode: host
+    # --primary-interface is required, not optional: on a host that also runs
+    # other Docker containers (like stt/tts here), matter-server's own
+    # auto-detection can latch onto one of THEIR bridge networks (e.g.
+    # br-xxxxxxxx) instead of the real LAN/WiFi uplink, which breaks mDNS
+    # advertisement ("Network is unreachable") without an obvious error
+    # pointing at the cause. The ${VAR:?...} form fails docker compose up
+    # immediately with a clear message if MATTER_PRIMARY_INTERFACE isn't set,
+    # rather than starting and silently picking the wrong interface.
+    command: --storage-path /data --primary-interface ${MATTER_PRIMARY_INTERFACE:?Set MATTER_PRIMARY_INTERFACE in .env to your real network interface name -- run 'ip link show' on the host and pick the real LAN/WiFi one, not a docker0/br-.../veth... interface}
     volumes:
       - ./data/matter-server:/data
       - /run/dbus:/run/dbus:ro

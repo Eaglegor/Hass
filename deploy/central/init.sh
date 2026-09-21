@@ -137,6 +137,39 @@ else
   fi
 fi
 
+# --- 7. Install a systemd unit to refresh DNS on every boot ---
+# homeassistant/matter-server run with network_mode: host, and Docker only
+# writes their /etc/resolv.conf once, at container creation. Because they use
+# `restart: unless-stopped`, a reboot just restarts the *same* container
+# instead of recreating it, so a stale (sometimes loopback-pointing) DNS
+# snapshot from whenever it was first created persists across every reboot
+# since -- confirmed on real hardware. refresh-dns.sh force-recreates both
+# containers once the host's own DNS (dhcpcd-managed) is actually up, and this
+# unit runs it on every boot so it's automatic instead of a manual fix.
+unit_path="/etc/systemd/system/hass-dns-refresh.service"
+if [[ -f "${unit_path}" ]]; then
+  log "hass-dns-refresh.service already installed, skipping."
+else
+  log "Installing hass-dns-refresh.service to refresh DNS on every boot..."
+  sudo tee "${unit_path}" > /dev/null <<EOF
+[Unit]
+Description=Force-recreate Home Assistant containers to pick up fresh DNS after boot
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=${SCRIPT_DIR}
+ExecStart=${SCRIPT_DIR}/refresh-dns.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  sudo systemctl daemon-reload
+  sudo systemctl enable hass-dns-refresh.service
+fi
+
 log "Waiting for containers to report healthy status..."
 sleep 5
 sudo docker compose ps
@@ -171,9 +204,11 @@ README.md in case you hit them anyway:
     correction/limiting, or it crash-loops on --preload-language.
   - vosk-model-ru-0.54 ("the big Russian model") is NOT Vosk-API-compatible
     -- don't bother trying it, see README for why.
-  - If you ever change this host's network (Wi-Fi, subnet, VLAN), you must
-    run `sudo docker compose up -d --force-recreate homeassistant`
-    afterward -- a plain restart or reboot reuses the container's original
+  - Reboots refresh DNS automatically now (hass-dns-refresh.service, step 7
+    above). If you change this host's network (Wi-Fi, subnet, VLAN) *without*
+    rebooting, run `bash refresh-dns.sh` (or
+    `sudo docker compose up -d --force-recreate homeassistant matter-server`)
+    manually afterward -- a plain restart reuses the container's original
     /etc/resolv.conf, which goes stale and breaks DNS (including to
     OpenRouter) until recreated.
 ================================================================================

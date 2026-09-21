@@ -220,12 +220,21 @@ separately.
   fallback paths immediately instead of stalling. Costs only DCL's live data
   freshness (vendor names may show as bare vendor IDs instead of friendly
   names; PAA certs still come from the Git mirror either way).
-- **If the host's network configuration changes** (new Wi-Fi network, new IP, moved
-  to a different subnet/VLAN — e.g. to reach a satellite on a different segment),
-  restart the `homeassistant` container afterward: `sudo docker compose restart
-  homeassistant`. Because it runs with `network_mode: host`, HA's mDNS/zeroconf
-  discovery binds directly to host interfaces and can be left in a stale state by
-  a live network change underneath it, causing general instability until restarted.
+- **DNS can go stale inside `homeassistant`/`matter-server`** — Docker only
+  writes their `/etc/resolv.conf` once, at container creation; since both use
+  `restart: unless-stopped`, a reboot just restarts the *same* container
+  instead of recreating it, so that snapshot (confirmed on real hardware to
+  sometimes be loopback-pointing, e.g. `nameserver ::1`/`127.0.0.1` from
+  whenever it was first created, even though the host's own dhcpcd-managed
+  `/etc/resolv.conf` is fine) persists across every reboot since — breaking
+  outbound DNS (OpenRouter, DCL, etc.) until fixed. `init.sh` installs
+  `hass-dns-refresh.service`, a systemd unit that runs `refresh-dns.sh` on
+  every boot to force-recreate both containers once the host's DNS is
+  actually up, so this is automatic on a machine set up via `init.sh`. If you
+  change the host's network (Wi-Fi, subnet, VLAN) *without* rebooting, or
+  didn't use `init.sh`, run `bash refresh-dns.sh` (or
+  `sudo docker compose up -d --force-recreate homeassistant matter-server`)
+  by hand afterward.
 
 ## What's deliberately not here yet
 

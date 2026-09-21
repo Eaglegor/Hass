@@ -26,6 +26,8 @@ Delivery order for the MVP scope (Tier A + central services + LLM connector — 
 
 ### Milestone 2 — LiteLLM proxy in front of OpenRouter
 
+**Status: proxy deployed and verified; switching HA's pipeline over to it is the last step** — see "Milestone 2 implementation notes" below.
+
 - Stand up `LargeLanguageModelConnector` (the LiteLLM proxy) and switch HA's conversation agent to it via the official `litellm` HA integration.
 - Configure OpenRouter as one of LiteLLM's provider entries — functionally equivalent to Milestone 1 at first, but now provider-swappable (see Decisions/Research on keeping LiteLLM as the primary gateway).
 - This is where the LiteLLM tool-calling passthrough needs to be validated end to end (see Research above) before relying on it for real device control.
@@ -244,7 +246,7 @@ services:
       - TTS_ENGINE=silero
 
   llm-connector:
-    image: ghcr.io/berriai/litellm:latest
+    image: ghcr.io/berriai/litellm:v1.102.0  # pinned, not :latest -- see Milestone 2 notes
     networks: [hass_net]
     volumes: ["./config/litellm/config.yaml:/app/config.yaml"]
     environment:
@@ -294,12 +296,20 @@ Each first-party component (`vad`, `stt`, `tts`) lives in its own `services/<nam
 - **Confirmed working end-to-end on real hardware**: wake word (local, ESPHome ReSpeaker satellite) → STT (Vosk small model/Wyoming) → OpenRouter (direct, no LiteLLM yet) → TTS (Silero) → audible spoken response. Recognition accuracy with the small Vosk model is workable but weak — a real, felt problem, not just a theoretical latency concern.
 - **Migrating an existing ESPHome satellite to a new HA instance needs no reflashing** — it just needs to be on the same network and re-added via the ESPHome integration (mDNS discovery, or manual IP + the device's own `api: encryption: key:` if enabled).
 
+## Milestone 2 implementation notes
+
+- **Deployed as `llm-connector`** in `deploy/central/docker-compose.yml`: LiteLLM `v1.102.0` (pinned; the same image as `main-stable` on 2026-09-21), bound to `127.0.0.1:4000` since HA is on host networking, no database (master-key auth only — virtual keys/spend tracking aren't needed here).
+- **Reconfigurability is by model alias.** HA's `litellm` integration lists models straight from the proxy's `/v1/models`, so the HA agent selects the alias `assistant`, and `config/litellm/config.yaml` maps it to the real provider/model (currently `openrouter/google/gemini-3.5-flash-lite`). Changing model or provider, adding a direct provider, a local Ollama model, or OpenRouter→direct failover (same alias on several entries) is a config edit plus `docker compose restart llm-connector`; HA is untouched. This is the concrete answer to "not locked into OpenRouter".
+- **Tool-calling passthrough, validated at the proxy** against that model: plain chat, tool call non-streaming, tool call streaming, a streamed turn with text *and* a tool call in the same response (the [litellm#17246](https://github.com/BerriAI/litellm/issues/17246) failure mode — it worked here), and a tool-result follow-up round trip. Round trips were ~0.5–0.8s for tool calls, ~2s for the first plain-chat call. Still to do: the same check through HA's real Assist tool set via the `litellm` integration, since HA's tool definitions are far larger than the one-function probe used here.
+- **Feature gap vs. HA's `open_router` integration.** The `litellm` agent only exposes model, system prompt, and Assist API selection. The previous OpenRouter agent used OpenRouter's native web search (`web_search: tool_native`); that has no equivalent in the `litellm` integration and is not carried over. The agent's system prompt is a separate setting and has to be copied across manually when switching.
+- **`init.sh` now generates/collects everything `.env` needs** (`LITELLM_MASTER_KEY` generated, `OPENROUTER_API_KEY` prompted or taken from the environment, `MATTER_PRIMARY_INTERFACE` taken from the default route) — the last one was a pre-existing gap that would have failed a fresh `docker compose up`.
+
 ## Open questions
 
 - Exact Silero voice/language for Tier A's TTS.
 - **Find a genuinely Vosk-API-compatible way to improve Russian STT accuracy beyond the small model** — the "big model" path is closed (see above); this now points toward either finding an older classic-format Russian model if one still exists, or switching to the already-documented Whisper fallback for Tier A's STT specifically.
 - **Benchmark actual sub-second latency for Vosk STT + Silero TTS on real N150-class CPU hardware**, with realistic short Russian utterances — confirmed working qualitatively on real hardware, but not yet actually measured; if it doesn't hit the target, fall back to the iGPU-accelerated Whisper/Piper containers already identified above.
-- **End-to-end test LiteLLM tool-calling once specific backend models are chosen**: known failure modes exist (see research above) — verify each planned model actually gets tool calls through reliably via the `litellm` HA integration, not just that LiteLLM nominally lists it as function-calling capable.
+- **End-to-end test LiteLLM tool-calling through HA's real Assist tools** (proxy-level checks pass for `google/gemini-3.5-flash-lite`, see Milestone 2 notes) — and repeat per backend model as more are added to `config.yaml`, since known failure modes exist (see research above) and vary by model.
 - Tier B (post-MVP, deferred): STT/TTS engine choice, wake-word engine, and packaging/deployment shape (systemd service vs. Docker Compose on the N150).
 - Tier B (post-MVP): whether OVOS's `skill-homeassistant` can be adapted into a pass-through mode (all utterances → HA's conversation agent) or whether a small custom OVOS pipeline plugin needs to be written instead.
 - Tier B (post-MVP): whether OVOS's stock listener already buffers enough pre-roll audio around the wake-word trigger to deliver the no-pause experience, or whether that needs explicit tuning/patching.

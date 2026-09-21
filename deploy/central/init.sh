@@ -3,11 +3,13 @@
 # Bootstraps a fresh Debian machine (developed against Debian 13 "trixie" on an
 # Intel N150 mini PC) with the Milestone 1 central stack: installs Docker and
 # brings up Home Assistant Core + SpeechToTextEngine (Vosk) + TextToSpeechEngine
-# (Silero).
+# (Silero) + the LargeLanguageModelConnector (LiteLLM proxy, Milestone 2).
 #
 # Usage — clone this repo yourself first, then run the script from within it:
 #   git clone https://github.com/Eaglegor/Hass.git
 #   bash Hass/deploy/central/init.sh
+# It prompts for your OpenRouter API key; to skip the prompt (or run without a
+# terminal), pass it in the environment: OPENROUTER_API_KEY=sk-or-... bash ...
 #
 # It also pre-installs HACS's files into the Home Assistant config (the same
 # `wget | bash` installer, run inside the container). What it does NOT do (see
@@ -16,7 +18,7 @@
 #   - HACS's one-time GitHub device-activation flow, and installing the
 #     Silero TTS Enhanced integration through it
 #   - Adding the Wyoming STT integration, the TTS integration, and the
-#     OpenRouter conversation agent in the HA UI
+#     LiteLLM conversation agent in the HA UI
 #   - Setting up the Assist pipeline
 #   - Adding Tier A satellites (ESPHome devices, ReSpeakers, etc.)
 # These are one-time, UI-driven steps with no reliable API to script against.
@@ -191,6 +193,57 @@ else
   cp .env.example .env
 fi
 
+# Read/write a single KEY=value line in .env. Values here are all URL-safe
+# tokens/interface names, so no quoting/escaping is needed.
+env_get() { grep -E "^$1=" .env | tail -n1 | cut -d= -f2- || true; }
+env_set() {
+  local tmp
+  tmp="$(mktemp)"
+  grep -vE "^$1=" .env > "${tmp}" || true
+  printf '%s=%s\n' "$1" "$2" >> "${tmp}"
+  cat "${tmp}" > .env
+  rm -f "${tmp}"
+}
+
+# docker-compose.yml refuses to start without these, so fill them in now
+# instead of letting `docker compose up` fail with a bare "variable not set".
+
+# The real LAN/WiFi interface, for matter-server -- the default route's
+# interface is right on a normal single-uplink box; check `ip link show` and
+# edit .env by hand if this machine is unusual.
+if [[ -z "$(env_get MATTER_PRIMARY_INTERFACE)" ]]; then
+  matter_iface="$(ip route show default 2>/dev/null | awk '/^default/ {print $5; exit}')"
+  if [[ -z "${matter_iface}" ]]; then
+    warn "Couldn't detect the default network interface. Set MATTER_PRIMARY_INTERFACE in .env (see 'ip link show'), then re-run."
+    exit 1
+  fi
+  log "Setting MATTER_PRIMARY_INTERFACE=${matter_iface} (default route's interface)."
+  env_set MATTER_PRIMARY_INTERFACE "${matter_iface}"
+fi
+
+# Shared secret between HA's `litellm` integration and the LiteLLM proxy --
+# only needs to be consistent, so generate one rather than asking.
+if [[ -z "$(env_get LITELLM_MASTER_KEY)" ]]; then
+  log "Generating LITELLM_MASTER_KEY."
+  env_set LITELLM_MASTER_KEY "sk-litellm-$(head -c 32 /dev/urandom | base64 | tr -d '\n=+/' | head -c 43)"
+fi
+
+# The one thing that can't be generated. Take it from the environment
+# (OPENROUTER_API_KEY=... bash init.sh) or prompt for it.
+if [[ -z "$(env_get OPENROUTER_API_KEY)" ]]; then
+  if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+    env_set OPENROUTER_API_KEY "${OPENROUTER_API_KEY}"
+  elif [[ -t 0 ]]; then
+    read -r -s -p "OpenRouter API key (https://openrouter.ai/keys): " openrouter_key
+    echo
+    [[ -n "${openrouter_key}" ]] || { warn "No key entered."; exit 1; }
+    env_set OPENROUTER_API_KEY "${openrouter_key}"
+  else
+    warn "OPENROUTER_API_KEY isn't set. Put it in .env, or run: OPENROUTER_API_KEY=sk-or-... bash init.sh"
+    exit 1
+  fi
+fi
+
 # --- 7. Bring up the stack ---
 log "Building and starting the stack (this takes a while the first time — the tts image builds from source, and stt downloads its Vosk model on first start)..."
 sudo docker compose up -d --build
@@ -249,8 +302,13 @@ deploy/central/README.md for full detail on each):
      install it, and configure it with server URL "http://localhost:8014".
      Do NOT use navatusein/silero-tts-service or the marytts platform --
      both are dead ends (see README for why).
-  4. Add an OpenRouter (or OpenAI Conversation pointed at OpenRouter's
-     base URL) integration with your API key.
+  4. Add the LiteLLM integration (the LLM conversation agent): URL
+     "http://localhost:4000", API key = LITELLM_MASTER_KEY from .env. Then
+     add a conversation agent to it, pick the "assistant" model, and enable
+     "Control Home Assistant" (Assist) if it should operate devices. To
+     change the underlying model/provider later, edit
+     config/litellm/config.yaml and `docker compose restart llm-connector`
+     -- nothing to change in HA.
   5. Settings -> Voice assistants -> build a pipeline using the STT, TTS,
      and conversation agent from steps 2-4.
   6. Add your Tier A satellite(s) (ESPHome devices, e.g. a ReSpeaker) --

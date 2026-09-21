@@ -1,14 +1,19 @@
-# Central stack — MVP Milestone 1
+# Central stack — MVP Milestones 1–2
 
-**Status: verified working end-to-end** on real hardware — wake word (local, ESPHome
+**Milestone 1: verified working end-to-end** on real hardware — wake word (local, ESPHome
 ReSpeaker satellite) → STT (Vosk/Wyoming) → OpenRouter LLM (conversation agent) →
 TTS (Silero) → spoken response, actually heard out of the ReSpeaker's speaker.
+
+**Milestone 2 (LiteLLM proxy in front of OpenRouter): proxy verified, HA switch-over
+pending** — the proxy itself is running and tested (chat, and tool calls both
+streaming and non-streaming); see [Conversation agent — via LiteLLM](#conversation-agent--via-litellm).
 
 Brings up the central pieces from [Milestone 1](../../architecture/README.md#milestone-1--core-pipeline-on-device-wake-word--vad-direct-openrouter):
 Home Assistant Core, `SpeechToTextEngine` (Vosk over Wyoming), and `TextToSpeechEngine`
 (Silero, via [indevor/silero-tts-enhanced-addon](https://github.com/indevor/silero-tts-enhanced-addon) +
 its [HACS companion integration](https://github.com/indevor/silero-tts-enhanced-hacs)).
-No `VoiceActivityDetection` container and no LiteLLM proxy yet — those are Milestones 2 and 3.
+Milestone 2 adds the `LargeLanguageModelConnector` (`llm-connector`, a LiteLLM proxy).
+No `VoiceActivityDetection` container yet — that's Milestone 3.
 
 Note on the TTS choice: `indevor/silero-tts-enhanced-addon` is packaged as a Home
 Assistant OS **Add-on** (Supervisor-only), which doesn't run on our Container-based
@@ -42,14 +47,15 @@ prints a checklist of them at the end).
 - At least one Tier A voice satellite (e.g. an ESP32 device running ESPHome's
   `voice_assistant` component with local wake word) — this stack has nothing to
   say to a microphone by itself.
-- An OpenRouter API key.
+- An OpenRouter API key (`init.sh` prompts for it; otherwise set `OPENROUTER_API_KEY` in `.env`).
 
 ## Bring it up
 
 ```bash
 cd deploy/central
 cp .env.example .env
-# edit .env if you want a different Vosk model/language
+# fill in OPENROUTER_API_KEY, LITELLM_MASTER_KEY (any random `sk-...` string) and
+# MATTER_PRIMARY_INTERFACE; edit anything else if you want a different Vosk model/language
 docker compose up -d --build
 docker compose logs -f
 ```
@@ -143,26 +149,61 @@ curl -X POST http://localhost:8014/tts \
 A non-empty, playable `test.wav` means the backend itself is working, independent
 of whatever HA-side wiring comes next.
 
-### Conversation agent — direct to OpenRouter
+### Conversation agent — via LiteLLM
 
-Per Milestone 1 there's no LiteLLM proxy yet, so point HA's OpenAI-compatible
-conversation integration straight at OpenRouter:
+The `llm-connector` container is a [LiteLLM](https://docs.litellm.ai/) proxy
+listening on `127.0.0.1:4000` (loopback only — HA's host networking reaches it
+there; nothing else on the LAN needs to). It sits between HA's conversation
+agent and OpenRouter, so the LLM provider can change without touching HA:
 
-1. Settings → Devices & Services → Add Integration.
-2. Look for **OpenRouter** first — if your HA version ships a dedicated
-   OpenRouter integration, use it directly with your API key.
-3. If it's not available, add **OpenAI Conversation** instead, and when
-   configuring it:
-   - API key: your OpenRouter key
-   - Base URL: `https://openrouter.ai/api/v1`
-   - Model: an OpenRouter model slug, e.g. `openai/gpt-4o-mini`
-4. Enable "Control Home Assistant" on the conversation agent if you want it to
-   expose entities as tool calls (see the architecture doc's notes on this).
+- HA only ever asks for the model **alias** `assistant`.
+- `config/litellm/config.yaml` maps that alias to a real provider/model
+  (currently `openrouter/google/gemini-3.5-flash-lite`).
+- **To change the model or provider later**: edit `litellm_params` in that file
+  (the file has commented examples for a direct Anthropic key, a local Ollama
+  model, and load-balancing/failover between entries sharing one alias), then
+  `docker compose restart llm-connector`. Nothing changes on the HA side.
+  Extra provider API keys go in `.env` *and* in `llm-connector`'s
+  `environment:` in `docker-compose.yml`.
+
+Wire HA to it:
+
+1. Settings → Devices & Services → Add Integration → **LiteLLM** (built into HA,
+   no HACS needed).
+2. URL `http://localhost:4000`; API key = `LITELLM_MASTER_KEY` from `.env`.
+3. On the new entry, **Add conversation agent**: pick the `assistant` model
+   (the list comes straight from the proxy's `/v1/models`) and enable
+   **Control Home Assistant → Assist** so it can operate devices.
+4. Switch the Assist pipeline's conversation agent to it (next section).
+
+Quick sanity check of the proxy independent of HA:
+
+```bash
+set -a; . ./.env; set +a
+curl -s http://127.0.0.1:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"assistant","messages":[{"role":"user","content":"ping"}]}'
+```
+
+The image is pinned to a version (`v1.102.0`) rather than a floating tag on
+purpose — LiteLLM's tool-calling layer has had upstream regressions (see the
+architecture doc's research), so bump it deliberately and re-run a tool-call
+check afterwards.
+
+**Verified at pin time (2026-09-21)** against `assistant` →
+`google/gemini-3.5-flash-lite` on OpenRouter: plain chat, a tool call
+non-streaming, a tool call streaming, streaming a turn with *both* text and a
+tool call (the [BerriAI/litellm#17246](https://github.com/BerriAI/litellm/issues/17246)
+scenario — worked), and a tool-result follow-up round trip. Not yet verified:
+HA's own Assist tool calls end to end through the `litellm` integration, and
+OpenRouter's native web search option, which the previous OpenRouter agent had
+enabled (`web_search: tool_native`) — the `litellm` integration has no such
+option, so that capability is not carried over.
 
 ### Assist pipeline
 
 Settings → Voice assistants → add a pipeline using the Wyoming STT you just
-added, the conversation agent from the previous step, and the Silero TTS
+added, the LiteLLM conversation agent from the previous step, and the Silero TTS
 integration from the previous section. Wake word stays on the Tier A device
 itself at this milestone — nothing to configure centrally for it yet.
 
@@ -280,6 +321,4 @@ separately.
 ## What's deliberately not here yet
 
 - `VoiceActivityDetection` container (Milestone 3).
-- `LargeLanguageModelConnector` / LiteLLM proxy (Milestone 2) — OpenRouter is
-  wired in directly for now, exactly as designed for this milestone.
 - Tier B (post-MVP).

@@ -120,3 +120,25 @@ services:
       # Model cache — the app looks for /data itself and persists here if
       # present, falling back to an ephemeral in-container path otherwise.
       - ./data/silero:/data
+
+  llm-connector:
+    # LargeLanguageModelConnector: a LiteLLM proxy between HA's conversation
+    # agent and the actual LLM provider(s). HA points at the stable alias in
+    # config/litellm/config.yaml, so providers/models can be swapped there
+    # without touching HA. Pinned to a version (same image as `main-stable` at
+    # the time of writing) rather than a floating tag: this layer has known
+    # tool-calling regressions upstream (see the architecture doc), so upgrades
+    # should be deliberate.
+    image: ghcr.io/berriai/litellm:v1.102.0
+    container_name: hass-llm
+    restart: unless-stopped
+    command: --config /app/config.yaml --port 4000
+    # Loopback only: HA runs with network_mode: host, so it reaches this at
+    # http://localhost:4000, and nothing else on the LAN needs to.
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - ./config/litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY in .env}
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env (any random string starting with sk-)}

@@ -1,0 +1,40 @@
+# LiteLLM proxy config for the LargeLanguageModelConnector (Milestone 2).
+#
+# Home Assistant's `litellm` integration talks to this proxy and only ever asks
+# for the model alias below ("assistant"), never for a provider's real model
+# name. To switch the underlying model or provider, edit `litellm_params` here
+# and `docker compose restart llm-connector` -- nothing changes on the HA side.
+#
+# Secrets are read from the environment (deploy/central/.env), never inlined.
+model_list:
+  - model_name: assistant
+    litellm_params:
+      # "openrouter/" is LiteLLM's provider prefix; the rest is the OpenRouter
+      # model slug (https://openrouter.ai/models).
+      model: openrouter/google/gemini-3.5-flash-lite
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # More providers/models go here as extra entries, e.g. a direct provider
+  # (needs its own API key in .env + docker-compose.yml's environment):
+  #
+  # - model_name: assistant-anthropic
+  #   litellm_params:
+  #     model: anthropic/claude-sonnet-5
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+  #
+  # Or a local Ollama model -- note LiteLLM needs tool calling opted into
+  # explicitly for these, and reliability varies a lot per model:
+  #
+  # - model_name: assistant-local
+  #   litellm_params:
+  #     model: ollama_chat/qwen3
+  #     api_base: http://localhost:11434
+  #   model_info:
+  #     supports_function_calling: true
+  #
+  # Giving several entries the SAME model_name makes LiteLLM load-balance/fail
+  # over between them, which is how to get OpenRouter -> direct-provider fallback.
+
+general_settings:
+  # HA's `litellm` integration sends this as its API key.
+  master_key: os.environ/LITELLM_MASTER_KEY

@@ -13,6 +13,21 @@ model_list:
       # model slug (https://openrouter.ai/models).
       model: openrouter/google/gemini-3.5-flash-lite
       api_key: os.environ/OPENROUTER_API_KEY
+    model_info:
+      # Provider-side tools appended to every request for THIS deployment, on
+      # top of the function tools HA sends (see custom_callbacks.py for why
+      # this isn't `extra_body`). Here: OpenRouter's server-side web search,
+      # run natively by the model's own provider (Gemini grounding, for this
+      # model) -- the model decides per request whether to search, so "turn on
+      # the light" doesn't pay for a search. `engine: native` is what HA's old
+      # OpenRouter integration used; other engines (exa, firecrawl,
+      # perplexity, ...) or `:online`-style always-on search are alternatives
+      # -- see https://openrouter.ai/docs/features/web-search. Delete this
+      # block to turn search off, or replace it when switching providers.
+      extra_tools:
+        - type: openrouter:web_search
+          parameters:
+            engine: native
 
   # More providers/models go here as extra entries, e.g. a direct provider
   # (needs its own API key in .env + docker-compose.yml's environment):
@@ -21,6 +36,10 @@ model_list:
   #   litellm_params:
   #     model: anthropic/claude-sonnet-5
   #     api_key: os.environ/ANTHROPIC_API_KEY
+  #   # Anthropic's own server tool instead of OpenRouter's:
+  #   model_info:
+  #     extra_tools:
+  #       - {type: web_search_20250305, name: web_search, max_uses: 3}
   #
   # Or a local Ollama model -- note LiteLLM needs tool calling opted into
   # explicitly for these, and reliability varies a lot per model:
@@ -34,6 +53,11 @@ model_list:
   #
   # Giving several entries the SAME model_name makes LiteLLM load-balance/fail
   # over between them, which is how to get OpenRouter -> direct-provider fallback.
+
+litellm_settings:
+  # Loads custom_callbacks.py (mounted next to this file) -- appends the
+  # `extra_tools` above to requests.
+  callbacks: custom_callbacks.extra_tools_injector
 
 general_settings:
   # HA's `litellm` integration sends this as its API key.

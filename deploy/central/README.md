@@ -173,7 +173,9 @@ Wire HA to it:
 2. URL `http://localhost:4000`; API key = `LITELLM_MASTER_KEY` from `.env`.
 3. On the new entry, **Add conversation agent**: pick the `assistant` model
    (the list comes straight from the proxy's `/v1/models`) and enable
-   **Control Home Assistant → Assist** so it can operate devices.
+   **Control Home Assistant → Assist** so it can operate devices. The system
+   prompt/persona is set in this agent's own **Prompt** field in the HA UI — it
+   is deliberately not kept in this repo, so re-enter it by hand after a rebuild.
 4. Switch the Assist pipeline's conversation agent to it (next section).
 
 Quick sanity check of the proxy independent of HA:
@@ -195,10 +197,38 @@ check afterwards.
 non-streaming, a tool call streaming, streaming a turn with *both* text and a
 tool call (the [BerriAI/litellm#17246](https://github.com/BerriAI/litellm/issues/17246)
 scenario — worked), and a tool-result follow-up round trip. Not yet verified:
-HA's own Assist tool calls end to end through the `litellm` integration, and
-OpenRouter's native web search option, which the previous OpenRouter agent had
-enabled (`web_search: tool_native`) — the `litellm` integration has no such
-option, so that capability is not carried over.
+HA's own Assist tool calls end to end through the `litellm` integration (the
+probes used up to 15 synthetic function tools, not HA's real tool set).
+
+#### Web search
+
+HA's `litellm` integration can't enable provider-side search (it only sends the
+function tools Assist exposes), so `config.yaml` does it at the proxy instead:
+`model_info.extra_tools` on the `assistant` deployment lists tools that
+`custom_callbacks.py` **appends** to each request going to that deployment. It's
+currently OpenRouter's `openrouter:web_search` with `engine: native` — exactly
+what HA's old `open_router` agent used (`web_search: tool_native`). The model
+decides per request whether to search, so ordinary commands ("turn on the
+light") don't pay for it: in testing, a device command took ~2.4s with 15 tools
+and no search, a simple question 0.6s, and a live-data question (weather, FX
+rate) ~2s with a citation.
+
+- **Turn it off / change it** by deleting or editing that `extra_tools` block,
+  then `docker compose restart llm-connector`. Other OpenRouter engines
+  (`exa`, `firecrawl`, `perplexity`, …) only differ in `parameters.engine`.
+- **Why a hook and not `litellm_params.extra_body.tools`:** `extra_body` *replaces*
+  the request's `tools` instead of adding to them — confirmed by inspecting the
+  request LiteLLM actually sends upstream — so HA's device-control tools would
+  silently vanish.
+- **It's per deployment, not per alias**, so if one alias fails over between
+  providers, each backend only receives its own search tool (OpenRouter's tool
+  never reaches a direct Anthropic key, which would use Anthropic's own
+  `web_search_20250305` — see the commented example in `config.yaml`).
+- **Switching to a model with no native search** (e.g. a local Ollama model)
+  needs a different approach — an HA-side search tool script backed by SearXNG
+  or a search API — since nothing at the proxy can give such a model search for
+  free. LiteLLM has a `websearch_interception` feature, but it only converts a
+  search tool the *client* sends, and HA's integration never sends one.
 
 ### Assist pipeline
 

@@ -220,21 +220,39 @@ separately.
   fallback paths immediately instead of stalling. Costs only DCL's live data
   freshness (vendor names may show as bare vendor IDs instead of friendly
   names; PAA certs still come from the Git mirror either way).
-- **DNS can go stale inside `homeassistant`/`matter-server`** — Docker only
-  writes their `/etc/resolv.conf` once, at container creation; since both use
-  `restart: unless-stopped`, a reboot just restarts the *same* container
-  instead of recreating it, so that snapshot (confirmed on real hardware to
-  sometimes be loopback-pointing, e.g. `nameserver ::1`/`127.0.0.1` from
-  whenever it was first created, even though the host's own dhcpcd-managed
-  `/etc/resolv.conf` is fine) persists across every reboot since — breaking
-  outbound DNS (OpenRouter, DCL, etc.) until fixed. `init.sh` installs
-  `hass-dns-refresh.service`, a systemd unit that runs `refresh-dns.sh` on
-  every boot to force-recreate both containers once the host's DNS is
-  actually up, so this is automatic on a machine set up via `init.sh`. If you
-  change the host's network (Wi-Fi, subnet, VLAN) *without* rebooting, or
-  didn't use `init.sh`, run `bash refresh-dns.sh` (or
-  `sudo docker compose up -d --force-recreate homeassistant matter-server`)
-  by hand afterward.
+- **DNS stability for `homeassistant`/`matter-server`** — Docker only writes a
+  host-networked container's `/etc/resolv.conf` once, at creation; it's never
+  kept in sync afterward. Pointing it at a *dynamic* nameserver IP (what
+  `dhcpcd` puts there directly, e.g. `nameserver 10.0.0.1`) means that
+  snapshot goes stale the moment the real upstream server changes — including
+  across a plain reboot, since `restart: unless-stopped` restarts the
+  existing container rather than recreating it (confirmed on real hardware:
+  the snapshot can end up loopback-pointing, e.g. `nameserver ::1`/
+  `127.0.0.1`, from whenever the container happened to first be created, and
+  then just persists, breaking outbound DNS to OpenRouter/DCL/etc. on every
+  boot since). Recreating the containers on every boot to paper over this was
+  considered and rejected — it's still a race against `dhcpcd` at boot, and
+  treats the symptom rather than the cause.
+
+  The actual fix, which `init.sh` sets up: install and enable
+  **`systemd-resolved`**, and point `/etc/resolv.conf` at its stub listener
+  (`127.0.0.53`) instead of a raw DHCP-assigned IP. That address is fixed —
+  it never changes across reboots or network switches — while
+  `systemd-resolved` itself gets fed the real upstream nameserver dynamically
+  by `dhcpcd`'s built-in hook. So a container's one-time DNS snapshot says
+  "ask 127.0.0.53" forever, and that's always correct, regardless of what the
+  actual upstream server is at any given moment. `init.sh` is idempotent here
+  (safe to rerun) and also removes any leftover `hass-dns-refresh.service`
+  from an earlier version of this script that tried the recreate-on-boot
+  approach.
+
+  If DNS ever misbehaves despite this, check `resolvectl status` and
+  `systemctl status systemd-resolved` — there's a known rough edge between
+  `dhcpcd`'s traditional resolvconf hook and systemd's `resolvectl`-based
+  resolvconf shim. `init.sh` backs up the previous `/etc/resolv.conf` to
+  `/etc/resolv.conf.pre-systemd-resolved.bak` before switching, so you can
+  roll back with `sudo ln -sf /etc/resolv.conf.pre-systemd-resolved.bak
+  /etc/resolv.conf` if needed.
 
 ## What's deliberately not here yet
 

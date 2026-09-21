@@ -91,7 +91,69 @@ fi
 
 cd "${SCRIPT_DIR}"
 
-# --- 4. Set up .env ---
+# --- 4. Configure systemd-resolved for stable DNS (host + containers) ---
+# homeassistant/matter-server run with network_mode: host, and Docker only
+# writes their /etc/resolv.conf once, at container creation -- it's never kept
+# in sync afterward. Recreating those containers on every boot to work around
+# that is fragile (it still depends on winning a race against dhcpcd at boot,
+# confirmed flaky on real hardware) and treats the symptom, not the cause.
+# The actual fix is to stop putting a *dynamic* nameserver IP in resolv.conf
+# at all: point it at systemd-resolved's stub listener (127.0.0.53), a fixed
+# address that's always there regardless of reboots or network changes, and
+# let systemd-resolved -- which dhcpcd feeds the real upstream server(s) to
+# dynamically via its built-in hook -- do the actual forwarding. Once
+# /etc/resolv.conf says "ask 127.0.0.53", a container's one-time DNS snapshot
+# never goes stale again, because that address itself never changes.
+if systemctl is-active --quiet systemd-resolved 2>/dev/null && \
+   [[ "$(readlink -f /etc/resolv.conf 2>/dev/null)" == "/run/systemd/resolve/stub-resolv.conf" ]]; then
+  log "systemd-resolved already configured as the stable resolver, skipping."
+else
+  log "Installing and enabling systemd-resolved..."
+  sudo apt-get update
+  sudo apt-get install -y systemd-resolved
+  sudo systemctl enable --now systemd-resolved
+
+  if [[ -f /etc/resolv.conf && ! -L /etc/resolv.conf ]]; then
+    sudo cp /etc/resolv.conf /etc/resolv.conf.pre-systemd-resolved.bak
+    log "Backed up the old /etc/resolv.conf to /etc/resolv.conf.pre-systemd-resolved.bak"
+  fi
+  sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+
+  log "Verifying DNS still resolves through the stub (up to 15s for dhcpcd to hand systemd-resolved the upstream server)..."
+  dns_ok=false
+  for _ in $(seq 1 15); do
+    if getent hosts github.com &>/dev/null; then
+      dns_ok=true
+      break
+    fi
+    sleep 1
+  done
+
+  if [[ "${dns_ok}" != "true" ]]; then
+    warn "DNS isn't resolving through systemd-resolved's stub yet. Debian's dhcpcd ships a hook that should hand it the upstream server automatically -- check 'resolvectl status' and 'systemctl status systemd-resolved'. To roll back: sudo ln -sf /etc/resolv.conf.pre-systemd-resolved.bak /etc/resolv.conf"
+  else
+    log "DNS resolves correctly through systemd-resolved's stub."
+  fi
+fi
+
+# Clean up the old per-boot recreate unit from an earlier version of this
+# script, if present -- systemd-resolved above replaces the need for it.
+if [[ -f /etc/systemd/system/hass-dns-refresh.service ]]; then
+  log "Removing the old hass-dns-refresh.service (superseded by systemd-resolved)..."
+  sudo systemctl disable --now hass-dns-refresh.service 2>/dev/null || true
+  sudo rm -f /etc/systemd/system/hass-dns-refresh.service
+  sudo systemctl daemon-reload
+fi
+
+# If homeassistant/matter-server already exist, their DNS snapshot predates
+# the fix above -- recreate them once now so it takes effect immediately,
+# rather than waiting for the next incidental recreate.
+if sudo docker compose ps -q homeassistant matter-server 2>/dev/null | grep -q .; then
+  log "Force-recreating homeassistant/matter-server once to pick up the new resolver config..."
+  sudo docker compose up -d --force-recreate homeassistant matter-server
+fi
+
+# --- 5. Set up .env ---
 if [[ -f .env ]]; then
   log ".env already exists, leaving it as-is."
 else
@@ -99,11 +161,11 @@ else
   cp .env.example .env
 fi
 
-# --- 5. Bring up the stack ---
+# --- 6. Bring up the stack ---
 log "Building and starting the stack (this takes a while the first time — the tts image builds from source, and stt downloads its Vosk model on first start)..."
 sudo docker compose up -d --build
 
-# --- 6. Pre-install HACS into the Home Assistant config ---
+# --- 7. Pre-install HACS into the Home Assistant config ---
 # This only lays down HACS's files via the same installer script we'd otherwise
 # run by hand inside the container — it still needs a one-time GitHub
 # device-activation flow in the HA UI afterward (Settings -> Devices & Services
@@ -135,39 +197,6 @@ else
     log "Restarting Home Assistant to pick up HACS..."
     sudo docker compose restart homeassistant
   fi
-fi
-
-# --- 7. Install a systemd unit to refresh DNS on every boot ---
-# homeassistant/matter-server run with network_mode: host, and Docker only
-# writes their /etc/resolv.conf once, at container creation. Because they use
-# `restart: unless-stopped`, a reboot just restarts the *same* container
-# instead of recreating it, so a stale (sometimes loopback-pointing) DNS
-# snapshot from whenever it was first created persists across every reboot
-# since -- confirmed on real hardware. refresh-dns.sh force-recreates both
-# containers once the host's own DNS (dhcpcd-managed) is actually up, and this
-# unit runs it on every boot so it's automatic instead of a manual fix.
-unit_path="/etc/systemd/system/hass-dns-refresh.service"
-if [[ -f "${unit_path}" ]]; then
-  log "hass-dns-refresh.service already installed, skipping."
-else
-  log "Installing hass-dns-refresh.service to refresh DNS on every boot..."
-  sudo tee "${unit_path}" > /dev/null <<EOF
-[Unit]
-Description=Force-recreate Home Assistant containers to pick up fresh DNS after boot
-After=docker.service network-online.target
-Wants=network-online.target
-Requires=docker.service
-
-[Service]
-Type=oneshot
-WorkingDirectory=${SCRIPT_DIR}
-ExecStart=${SCRIPT_DIR}/refresh-dns.sh
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  sudo systemctl daemon-reload
-  sudo systemctl enable hass-dns-refresh.service
 fi
 
 log "Waiting for containers to report healthy status..."
@@ -204,12 +233,11 @@ README.md in case you hit them anyway:
     correction/limiting, or it crash-loops on --preload-language.
   - vosk-model-ru-0.54 ("the big Russian model") is NOT Vosk-API-compatible
     -- don't bother trying it, see README for why.
-  - Reboots refresh DNS automatically now (hass-dns-refresh.service, step 7
-    above). If you change this host's network (Wi-Fi, subnet, VLAN) *without*
-    rebooting, run `bash refresh-dns.sh` (or
-    `sudo docker compose up -d --force-recreate homeassistant matter-server`)
-    manually afterward -- a plain restart reuses the container's original
-    /etc/resolv.conf, which goes stale and breaks DNS (including to
-    OpenRouter) until recreated.
+  - DNS stability: this script points /etc/resolv.conf at systemd-resolved's
+    stub (127.0.0.53) instead of a raw, DHCP-assigned nameserver IP, so
+    homeassistant/matter-server's one-time DNS snapshot never goes stale
+    across reboots or network changes -- no periodic container recreation
+    needed. See README.md's Operational notes if you ever see DNS failures
+    (OpenRouter, DCL, etc.) despite this.
 ================================================================================
 EOF

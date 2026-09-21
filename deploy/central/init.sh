@@ -91,7 +91,37 @@ fi
 
 cd "${SCRIPT_DIR}"
 
-# --- 4. Configure systemd-resolved for stable DNS (host + containers) ---
+# --- 4. Work around a known rtw88/RTL8821CE Bluetooth-coexistence bug ---
+# The RTL8821CE combo Wi-Fi/BT chip (common on N150 mini PCs) has a
+# well-documented rtw88 driver issue where its LPS ("Leisure Power Save")
+# deep-sleep mode conflicts with Bluetooth coexistence -- floods dmesg with
+# "failed to send h2c command" once Bluetooth is active (i.e. right after
+# step 3 above), and per an LKML report on this exact chip can escalate to a
+# hard system freeze when combined with PCIe ASPM:
+# https://lkml.iu.edu/2603.2/04736.html
+# Confirmed on real hardware. Skips cleanly on machines without this chip.
+rtw88_conf="/etc/modprobe.d/rtw88-h2c-fix.conf"
+rtw88_conf_desired="$(cat <<'EOF'
+# Works around rtw88's LPS-deep/ASPM interaction with Bluetooth coexistence on
+# the RTL8821CE combo Wi-Fi/BT chip -- floods dmesg with "failed to send h2c
+# command" and can hard-freeze the system per
+# https://lkml.iu.edu/2603.2/04736.html. See deploy/central/README.md.
+options rtw88_core disable_lps_deep=Y
+options rtw88_pci disable_aspm=Y
+EOF
+)"
+if ! lsmod | grep -q '^rtw88_core'; then
+  log "rtw88 driver not loaded on this machine (different Wi-Fi hardware), skipping h2c/LPS workaround."
+elif [[ -f "${rtw88_conf}" ]] && diff -q <(echo "${rtw88_conf_desired}") "${rtw88_conf}" &>/dev/null; then
+  log "rtw88 h2c/LPS-deep workaround already applied, skipping."
+else
+  log "Applying rtw88 h2c/LPS-deep workaround (requires a reboot to take effect)..."
+  echo "${rtw88_conf_desired}" | sudo tee "${rtw88_conf}" > /dev/null
+  sudo update-initramfs -u
+  warn "rtw88 workaround written to ${rtw88_conf} -- reboot this machine when convenient for it to take effect (it does NOT apply to the currently-loaded module)."
+fi
+
+# --- 5. Configure systemd-resolved for stable DNS (host + containers) ---
 # homeassistant/matter-server run with network_mode: host, and Docker only
 # writes their /etc/resolv.conf once, at container creation -- it's never kept
 # in sync afterward. Recreating those containers on every boot to work around
@@ -153,7 +183,7 @@ if sudo docker compose ps -q homeassistant matter-server 2>/dev/null | grep -q .
   sudo docker compose up -d --force-recreate homeassistant matter-server
 fi
 
-# --- 5. Set up .env ---
+# --- 6. Set up .env ---
 if [[ -f .env ]]; then
   log ".env already exists, leaving it as-is."
 else
@@ -161,11 +191,11 @@ else
   cp .env.example .env
 fi
 
-# --- 6. Bring up the stack ---
+# --- 7. Bring up the stack ---
 log "Building and starting the stack (this takes a while the first time — the tts image builds from source, and stt downloads its Vosk model on first start)..."
 sudo docker compose up -d --build
 
-# --- 7. Pre-install HACS into the Home Assistant config ---
+# --- 8. Pre-install HACS into the Home Assistant config ---
 # This only lays down HACS's files via the same installer script we'd otherwise
 # run by hand inside the container — it still needs a one-time GitHub
 # device-activation flow in the HA UI afterward (Settings -> Devices & Services

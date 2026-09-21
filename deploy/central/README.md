@@ -192,6 +192,18 @@ separately.
 
 ## Operational notes
 
+- **RTL8821CE Wi-Fi/Bluetooth combo chip floods dmesg with "failed to send h2c
+  command"** once Bluetooth is active (common on N150 mini PCs) — this is a
+  known `rtw88` driver bug (LPS deep-sleep mode conflicting with Bluetooth
+  coexistence), not harmless noise: per an
+  [LKML report on this exact chip](https://lkml.iu.edu/2603.2/04736.html), it
+  can escalate to a **hard system freeze** when combined with PCIe ASPM.
+  `init.sh` writes `/etc/modprobe.d/rtw88-h2c-fix.conf`
+  (`disable_lps_deep=Y`, `disable_aspm=Y`) to work around it — this requires
+  a **reboot** to take effect, since it doesn't apply to an already-loaded
+  module. If you ever see this log spam (or unexplained WiFi/Bluetooth
+  freezes) on a machine you didn't run `init.sh` on, or before rebooting
+  after running it, this is why.
 - **`matter-server` logs "Failed to advertise records: ... Network is unreachable"
   for `br-xxxxxxxx`** — this is expected noise, not a sign `MATTER_PRIMARY_INTERFACE`
   didn't take effect. `--primary-interface` only picks which interface's address

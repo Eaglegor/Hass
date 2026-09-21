@@ -93,15 +93,27 @@ fi
 
 cd "${SCRIPT_DIR}"
 
-# --- 4. Work around a known rtw88/RTL8821CE Bluetooth-coexistence bug ---
+# --- 4. Work around a known rtw88/RTL8821CE Wi-Fi/Bluetooth combo-chip bug ---
 # The RTL8821CE combo Wi-Fi/BT chip (common on N150 mini PCs) has a
-# well-documented rtw88 driver issue where its LPS ("Leisure Power Save")
-# deep-sleep mode conflicts with Bluetooth coexistence -- floods dmesg with
-# "failed to send h2c command" once Bluetooth is active (i.e. right after
-# step 3 above), and per an LKML report on this exact chip can escalate to a
-# hard system freeze when combined with PCIe ASPM:
-# https://lkml.iu.edu/2603.2/04736.html
-# Confirmed on real hardware. Skips cleanly on machines without this chip.
+# well-documented rtw88 driver issue: its firmware stops answering the driver's
+# H2C commands, flooding the kernel log with "failed to send h2c command" and
+# "firmware failed to leave lps state" (and, per an LKML report on this exact
+# chip, it can escalate to a hard system freeze when LPS deep-sleep combines
+# with PCIe ASPM): https://lkml.iu.edu/2603.2/04736.html
+# Skips cleanly on machines without this chip. Two parts, with different
+# confidence -- measured on real hardware (~160 h2c errors/min at baseline):
+#   a) Wi-Fi power save OFF (udev rule below) -- the one thing that measurably
+#      helped: "failed to leave lps state" errors went to zero and h2c errors
+#      roughly halved. Takes effect immediately.
+#   b) modprobe options disable_lps_deep / disable_aspm -- aimed at the freeze
+#      risk from the LKML report. Set live, neither reduced the log spam by
+#      itself, so treat these as freeze insurance, not a spam fix. They need a
+#      reboot (they only apply when the module loads).
+# What's left over is roughly one burst of h2c errors every 2 s (the driver's
+# watchdog) that persisted with Bluetooth fully off, HA stopped, ASPM off and
+# deep LPS off -- i.e. it is NOT caused by Bluetooth activity, as first
+# assumed. Harmless log noise as far as observed; only using Ethernet instead
+# of this Wi-Fi chip (or a different Wi-Fi card) removes it entirely.
 rtw88_conf="/etc/modprobe.d/rtw88-h2c-fix.conf"
 rtw88_conf_desired="$(cat <<'EOF'
 # Works around rtw88's LPS-deep/ASPM interaction with Bluetooth coexistence on
@@ -121,6 +133,28 @@ else
   echo "${rtw88_conf_desired}" | sudo tee "${rtw88_conf}" > /dev/null
   sudo update-initramfs -u
   warn "rtw88 workaround written to ${rtw88_conf} -- reboot this machine when convenient for it to take effect (it does NOT apply to the currently-loaded module)."
+fi
+
+# (a) Wi-Fi power save off, re-applied whenever the interface appears. Uses
+# iwconfig (wireless-tools) -- that's what was verified on real hardware.
+if lsmod | grep -q '^rtw88_core'; then
+  rtw88_udev="/etc/udev/rules.d/70-rtw88-wifi-power-save.rules"
+  rtw88_udev_desired="$(cat <<'EOF'
+# Disable Wi-Fi power save on the RTL8821CE: it removes the "firmware failed to
+# leave lps state" errors and about halves "failed to send h2c command". See
+# deploy/central/README.md.
+ACTION=="add|change", SUBSYSTEM=="net", DRIVERS=="rtw*_8821ce", RUN+="/usr/sbin/iwconfig %k power off"
+EOF
+)"
+  if [[ -f "${rtw88_udev}" ]] && diff -q <(echo "${rtw88_udev_desired}") "${rtw88_udev}" &>/dev/null; then
+    log "rtw88 Wi-Fi power-save udev rule already installed, skipping."
+  else
+    log "Disabling Wi-Fi power save on the RTL8821CE (udev rule, applies immediately)..."
+    sudo apt-get install -y wireless-tools
+    echo "${rtw88_udev_desired}" | sudo tee "${rtw88_udev}" > /dev/null
+    sudo udevadm control --reload
+    sudo udevadm trigger --action=change --subsystem-match=net
+  fi
 fi
 
 # --- 5. Configure systemd-resolved for stable DNS (host + containers) ---

@@ -263,18 +263,30 @@ separately.
 
 ## Operational notes
 
-- **RTL8821CE Wi-Fi/Bluetooth combo chip floods dmesg with "failed to send h2c
-  command"** once Bluetooth is active (common on N150 mini PCs) — this is a
-  known `rtw88` driver bug (LPS deep-sleep mode conflicting with Bluetooth
-  coexistence), not harmless noise: per an
+- **RTL8821CE Wi-Fi/Bluetooth combo chip floods the kernel log with "failed to
+  send h2c command"** (common on N150 mini PCs) — a known `rtw88` driver bug
+  where the firmware stops answering the driver's commands. Per an
   [LKML report on this exact chip](https://lkml.iu.edu/2603.2/04736.html), it
-  can escalate to a **hard system freeze** when combined with PCIe ASPM.
-  `init.sh` writes `/etc/modprobe.d/rtw88-h2c-fix.conf`
-  (`disable_lps_deep=Y`, `disable_aspm=Y`) to work around it — this requires
-  a **reboot** to take effect, since it doesn't apply to an already-loaded
-  module. If you ever see this log spam (or unexplained WiFi/Bluetooth
-  freezes) on a machine you didn't run `init.sh` on, or before rebooting
-  after running it, this is why.
+  can escalate to a **hard system freeze** when LPS deep-sleep combines with
+  PCIe ASPM. `init.sh` does two things about it, with **different, measured
+  effectiveness** (on real hardware, ~160 h2c errors/min at baseline):
+  - **Wi-Fi power save off** (a udev rule, `70-rtw88-wifi-power-save.rules`,
+    applies immediately): the only change that measurably helped —
+    "firmware failed to leave lps state" went to zero and h2c errors roughly
+    halved (~160 → ~69/min).
+  - **`/etc/modprobe.d/rtw88-h2c-fix.conf`** (`disable_lps_deep=Y`,
+    `disable_aspm=Y`, needs a **reboot** since it only applies when the module
+    loads): aimed at the freeze risk, not the spam. Applied live, neither
+    setting reduced the error rate on its own, so treat it as insurance.
+  - **What remains** is ~1 burst every 2 s from the driver's watchdog. It
+    persisted unchanged with Bluetooth fully off and HA stopped, so despite
+    the "Bluetooth coexistence" name this bug is usually filed under, it is
+    **not** caused by Bluetooth activity here. No stability problems were
+    observed with it, but it can't be eliminated with driver settings: the
+    real fixes are wired Ethernet (blacklist `rtw88_8821ce`; Bluetooth is a
+    separate USB device and keeps working) or a different Wi-Fi card.
+  - Boot-time behavior of the modprobe options and the udev rule hasn't been
+    verified across a reboot yet.
 - **`matter-server` logs "Failed to advertise records: ... Network is unreachable"
   for `br-xxxxxxxx`** — this is expected noise, not a sign `MATTER_PRIMARY_INTERFACE`
   didn't take effect. `--primary-interface` only picks which interface's address

@@ -246,10 +246,21 @@ separately.
   from an earlier version of this script that tried the recreate-on-boot
   approach.
 
-  If DNS ever misbehaves despite this, check `resolvectl status` and
-  `systemctl status systemd-resolved` — there's a known rough edge between
-  `dhcpcd`'s traditional resolvconf hook and systemd's `resolvectl`-based
-  resolvconf shim. `init.sh` backs up the previous `/etc/resolv.conf` to
+  **Expect `init.sh`'s own verification step to fail the very first time you
+  run this** (it'll warn "DNS isn't resolving through systemd-resolved's stub
+  yet" and things depending on DNS, like the `tts` image's git build context,
+  will fail right after) — confirmed on real hardware, and it's a one-time
+  bootstrap ordering quirk, not a bug: `dhcpcd` only pushes the upstream
+  nameserver to `systemd-resolved` via its hook when it acquires or renews a
+  lease, and if you already had a lease from *before* `systemd-resolved`
+  existed, there's no lease event left to trigger that hook. A single reboot
+  fixes it permanently, because every subsequent boot starts
+  `systemd-resolved` first and *then* has `dhcpcd` acquire a fresh lease,
+  firing the hook in the correct order. If it's still not working after a
+  reboot, check `resolvectl status` and `systemctl status systemd-resolved` —
+  there's a separate, known rough edge between `dhcpcd`'s traditional
+  resolvconf hook and systemd's `resolvectl`-based resolvconf shim.
+  `init.sh` backs up the previous `/etc/resolv.conf` to
   `/etc/resolv.conf.pre-systemd-resolved.bak` before switching, so you can
   roll back with `sudo ln -sf /etc/resolv.conf.pre-systemd-resolved.bak
   /etc/resolv.conf` if needed.

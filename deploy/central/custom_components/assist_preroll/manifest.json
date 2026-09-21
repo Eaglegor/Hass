@@ -1,0 +1,10 @@
+{
+  "domain": "assist_preroll",
+  "name": "Assist wake word pre-roll",
+  "version": "0.1.0",
+  "documentation": "https://github.com/Eaglegor/Hass/tree/main/deploy/central",
+  "dependencies": ["assist_pipeline"],
+  "codeowners": [],
+  "requirements": [],
+  "iot_class": "calculated"
+}

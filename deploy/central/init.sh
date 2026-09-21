@@ -316,6 +316,41 @@ else
   fi
 fi
 
+# --- 9. Enable the assist_preroll custom component in Home Assistant ---
+# docker-compose.yml mounts custom_components/assist_preroll from this repo into
+# HA's config; a custom component with only an async_setup still has to be
+# listed in configuration.yaml to load. Idempotent: appends only what's missing.
+ha_cfg="config/homeassistant/configuration.yaml"
+if grep -qs '^assist_preroll:' "${ha_cfg}"; then
+  log "assist_preroll already enabled in configuration.yaml, skipping."
+else
+  log "Waiting for Home Assistant to create its configuration (up to 3 minutes)..."
+  for _ in $(seq 1 180); do
+    [[ -f "${ha_cfg}" && -f config/homeassistant/.HA_VERSION ]] && break
+    sleep 1
+  done
+  if [[ ! -f "${ha_cfg}" ]]; then
+    warn "No ${ha_cfg} yet -- skipping the assist_preroll setup. Re-run this script once Home Assistant has started, or add it by hand (see README.md)."
+  else
+    log "Enabling assist_preroll (0.2 s wake word pre-roll for satellites)..."
+    cat >> "${ha_cfg}" <<'EOF'
+
+# Wake word pre-roll for satellites (custom_components/assist_preroll, from this repo).
+assist_preroll:
+  seconds: 0.2
+EOF
+    if ! grep -q '^logger:' "${ha_cfg}"; then
+      cat >> "${ha_cfg}" <<'EOF'
+
+logger:
+  logs:
+    custom_components.assist_preroll: info
+EOF
+    fi
+    sudo docker compose restart homeassistant
+  fi
+fi
+
 log "Waiting for containers to report healthy status..."
 sleep 5
 sudo docker compose ps

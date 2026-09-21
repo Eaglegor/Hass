@@ -13,7 +13,8 @@ Home Assistant Core, `SpeechToTextEngine` (Vosk over Wyoming), and `TextToSpeech
 (Silero, via [indevor/silero-tts-enhanced-addon](https://github.com/indevor/silero-tts-enhanced-addon) +
 its [HACS companion integration](https://github.com/indevor/silero-tts-enhanced-hacs)).
 Milestone 2 adds the `LargeLanguageModelConnector` (`llm-connector`, a LiteLLM proxy).
-No `VoiceActivityDetection` container yet — that's Milestone 3.
+Milestone 3 (central wake word, `wake-word` container) is in progress; there is no separate
+`VoiceActivityDetection` container because HA's Assist pipeline does VAD itself.
 
 Note on the TTS choice: `indevor/silero-tts-enhanced-addon` is packaged as a Home
 Assistant OS **Add-on** (Supervisor-only), which doesn't run on our Container-based
@@ -229,6 +230,46 @@ rate) ~2s with a citation.
   or a search API — since nothing at the proxy can give such a model search for
   free. LiteLLM has a `websearch_interception` feature, but it only converts a
   search tool the *client* sends, and HA's integration never sends one.
+
+### Central wake word (Milestone 3, in progress)
+
+Goal: say the wake word and the command in one breath, with no waiting for the
+chime. Diagnosis on the ReSpeaker XVF3800 satellite (formatBCE firmware): with
+local wake word the device plays a chime, waits 300 ms, and only then calls
+`voice_assistant.start`; nothing is streamed before that and there is no
+pre-roll. Turning the `Wake sound` switch off removes the chime and the 300 ms
+wait but not the detection-latency gap. The central alternative is to have the
+satellite stream continuously and detect the wake word **here**:
+
+- **`wake-word`** container (`rhasspy/wyoming-openwakeword`, `127.0.0.1:10400`).
+  Built-in models: `okay_nabu`, `hey_rhasspy`, `alexa`, `hey_jarvis`,
+  `hey_mycroft`; custom `.tflite` models go in `data/wake-word/`. Add it to HA
+  via Settings → Devices & Services → **Wyoming Protocol** → host `localhost`,
+  port `10400`; then pick its model as the *Wake word* in the Assist pipeline.
+- **`custom_components/assist_preroll`** (mounted into HA by compose, enabled by
+  `init.sh`): satellites never set HA's wake word pre-roll, so it defaults to 0 s
+  and the words spoken while the detector is still firing are lost. This sets
+  the default to `seconds: 0.2` (configuration.yaml). It monkeypatches an HA
+  internal, so it logs an error and does nothing if a future HA release moves it.
+- **`tools/preroll_harness/`**: streams "wake word + command" to the wake-word and
+  `stt` containers to measure detection latency and what STT hears for different
+  pre-roll sizes.
+
+**Measured (synthetic Silero TTS, `hey_jarvis`, 2 voices; 2026-09-21):**
+detection fires **+34 to +447 ms after the wake word ends** (varies by voice). With
+no pre-roll, a command spoken with no pause lost its first word ("включи" →
+"свет на кухне"); a 0.2 s pre-roll recovered the full command in all 4 cases;
+≥0.6 s let the wake word's tail leak into the transcript ("пафос включи свет…").
+Synthetic speech from two voices and one model is a start, not a tuning result —
+re-run the harness with real recordings of your own voice before trusting 0.2 s.
+
+**Not done yet — the satellite firmware.** The formatBCE firmware is built
+around on-device wake word (`voice_assistant` is bound to `micro_wake_word`,
+`use_wake_word: false`, detection is started on connect, and its barge-in logic
+assumes streaming only happens after a wake word). Central wake word needs the
+device to stream continuously (`use_wake_word: true` + `start_continuous`),
+which means restructuring that firmware — untested, because the satellite was
+off. Until then this container and the pre-roll are ready but unused by it.
 
 ### Assist pipeline
 

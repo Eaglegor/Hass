@@ -27,6 +27,9 @@ services:
       - /dev/ttyUSB0:/dev/ttyUSB0
     volumes:
       - ./config/homeassistant:/config
+      # Tracked in this repo (unlike the rest of /config): gives satellites a
+      # wake word pre-roll -- see custom_components/assist_preroll/__init__.py.
+      - ./custom_components/assist_preroll:/config/custom_components/assist_preroll:ro
       - /run/dbus:/run/dbus:ro
       - /dev/serial/by-id:/dev/serial/by-id
     environment:
@@ -120,6 +123,24 @@ services:
       # Model cache — the app looks for /data itself and persists here if
       # present, falling back to an ephemeral in-container path otherwise.
       - ./data/silero:/data
+
+  wake-word:
+    # Central wake word detection (Milestone 3): the satellite streams its mic
+    # continuously and HA runs wake word detection HERE, instead of the device
+    # detecting it locally. That removes the device-side "chime, wait, then
+    # start streaming" gap. Reached from HA over Wyoming (host networking =>
+    # localhost:10400), so it only needs to listen on loopback.
+    # Flags confirmed against `docker run --rm rhasspy/wyoming-openwakeword --help`.
+    # Built-in models: okay_nabu, hey_rhasspy, alexa, hey_jarvis, hey_mycroft.
+    # Custom models (.tflite) go in ./data/wake-word.
+    image: rhasspy/wyoming-openwakeword:2.1.0
+    container_name: hass-wake
+    restart: unless-stopped
+    command: --uri tcp://0.0.0.0:10400 --custom-model-dir /custom
+    ports:
+      - "127.0.0.1:10400:10400"
+    volumes:
+      - ./data/wake-word:/custom
 
   llm-connector:
     # LargeLanguageModelConnector: a LiteLLM proxy between HA's conversation
